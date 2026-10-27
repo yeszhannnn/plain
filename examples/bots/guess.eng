@@ -1,0 +1,18 @@
+when someone sends "/start"
+  set their secret to a random number from 1 to 100.
+  set their tries to 0.
+  reply "I picked a number from 1 to 100. Guess it!".
+that's all.
+
+when someone sends a number
+  add 1 to their tries.
+  if the number they sent is more than their secret, reply "Lower.".
+  otherwise, if the number they sent is less than their secret, reply "Higher.".
+  otherwise
+    reply "Yes! You needed" and then their tries and then "tries. I picked a new number.".
+    set their secret to a random number from 1 to 100.
+    set their tries to 0.
+  that's all.
+that's all.
+
+when someone sends anything else, reply "Send me a number, or /start to begin.".

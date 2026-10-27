@@ -1,10 +1,23 @@
 {
   "edition": "2026",
-
-  "articles": ["the", "a", "an"],
-  "filler": ["please", "just", "kindly"],
-  "label_words": ["word", "words", "text", "number", "value", "message", "phrase"],
-
+  "articles": [
+    "the",
+    "a",
+    "an"
+  ],
+  "filler": [
+    "please",
+    "just",
+    "kindly"
+  ],
+  "label_words": [
+    "word",
+    "words",
+    "text",
+    "number",
+    "value",
+    "phrase"
+  ],
   "contractions": {
     "that's": "that is",
     "it's": "it is",
@@ -12,60 +25,327 @@
     "what's": "what is",
     "doesn't": "does not"
   },
-
   "numbers": {
-    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
-    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
-    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
-    "hundred": 100, "thousand": 1000
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+    "hundred": 100,
+    "thousand": 1000
   },
-  "repeat_words": {"once": 1, "twice": 2, "thrice": 3},
-
+  "repeat_words": {
+    "once": 1,
+    "twice": 2,
+    "thrice": 3
+  },
   "words": {
-    "PRINT":     ["print", "prints", "printing", "show", "shows", "showing", "say", "says", "saying",
-                  "display", "displays", "output", "outputs", "write", "writes", "tell", "echo", "announce"],
-    "REPEAT":    ["repeat", "repeats", "do following", "repeat following", "do this"],
-    "SET":       ["set", "let", "make"],
-    "TO":        ["to", "be"],
-    "IS":        ["is", "are", "equals", "is equal to", "will be", "becomes"],
-    "ADD":       ["add", "adds", "adding"],
-    "INC":       ["increase", "increases", "increasing", "increment", "raise", "bump"],
-    "SUB":       ["subtract", "subtracts", "subtracting"],
-    "DEC":       ["decrease", "decreases", "decreasing", "decrement", "lower", "reduce"],
-    "BY":        ["by"],
-    "FROM":      ["from"],
-    "DOUBLE":    ["double", "doubles", "doubling"],
-    "HALVE":     ["halve", "halves", "halving"],
-    "KEEP":      ["keep", "keeps", "keep on"],
-    "UNTIL":     ["until", "till", "up until"],
-    "WHILE":     ["while", "whilst", "as long as"],
-    "IF":        ["if", "when", "only if", "but only if", "but if", "provided that", "provided"],
-    "THEN":      ["then"],
-    "OTHERWISE": ["otherwise", "else", "or else"],
-    "TIMES":     ["times"],
-    "PLUS":      ["plus"],
-    "MINUS":     ["minus", "take away"],
-    "MUL":       ["multiplied by"],
-    "DIV":       ["divided by"],
-    "GT":        ["is greater than", "is more than", "is bigger than", "is larger than", "is higher than",
-                  "is above", "is over", "exceeds", "goes above", "gets bigger than"],
-    "LT":        ["is less than", "is smaller than", "is fewer than", "is lower than", "is below", "is under"],
-    "GE":        ["is at least", "is greater than or equal to", "is not less than"],
-    "LE":        ["is at most", "is less than or equal to", "is not more than"],
-    "NE":        ["is not", "does not equal", "is different from"],
-    "AND":       ["and"],
-    "OR":        ["or"],
-    "NOT":       ["not"],
-    "CONCAT":    ["and then", "followed by"],
-    "IT":        ["it"],
-    "END":       ["that is all", "that is it", "done", "end"]
+    "PRINT": [
+      "print",
+      "prints",
+      "printing",
+      "show",
+      "shows",
+      "showing",
+      "say",
+      "says",
+      "saying",
+      "display",
+      "displays",
+      "output",
+      "outputs",
+      "write",
+      "writes",
+      "tell",
+      "echo",
+      "announce"
+    ],
+    "REPEAT": [
+      "repeat",
+      "repeats",
+      "do following",
+      "repeat following",
+      "do this"
+    ],
+    "SET": [
+      "set",
+      "let",
+      "make"
+    ],
+    "TO": [
+      "to",
+      "be"
+    ],
+    "IS": [
+      "is",
+      "are",
+      "equals",
+      "is equal to",
+      "will be",
+      "becomes"
+    ],
+    "ADD": [
+      "add",
+      "adds",
+      "adding"
+    ],
+    "INC": [
+      "increase",
+      "increases",
+      "increasing",
+      "increment",
+      "raise",
+      "bump"
+    ],
+    "SUB": [
+      "subtract",
+      "subtracts",
+      "subtracting"
+    ],
+    "DEC": [
+      "decrease",
+      "decreases",
+      "decreasing",
+      "decrement",
+      "lower",
+      "reduce"
+    ],
+    "BY": [
+      "by"
+    ],
+    "FROM": [
+      "from",
+      "between"
+    ],
+    "DOUBLE": [
+      "double",
+      "doubles",
+      "doubling"
+    ],
+    "HALVE": [
+      "halve",
+      "halves",
+      "halving"
+    ],
+    "KEEP": [
+      "keep",
+      "keeps",
+      "keep on"
+    ],
+    "UNTIL": [
+      "until",
+      "till",
+      "up until"
+    ],
+    "WHILE": [
+      "while",
+      "whilst",
+      "as long as"
+    ],
+    "IF": [
+      "if",
+      "when",
+      "only if",
+      "but only if",
+      "but if",
+      "provided that",
+      "provided"
+    ],
+    "THEN": [
+      "then"
+    ],
+    "OTHERWISE": [
+      "otherwise",
+      "else",
+      "or else"
+    ],
+    "TIMES": [
+      "times"
+    ],
+    "PLUS": [
+      "plus"
+    ],
+    "MINUS": [
+      "minus",
+      "take away"
+    ],
+    "MUL": [
+      "multiplied by"
+    ],
+    "DIV": [
+      "divided by"
+    ],
+    "GT": [
+      "is greater than",
+      "is more than",
+      "is bigger than",
+      "is larger than",
+      "is higher than",
+      "is above",
+      "is over",
+      "exceeds",
+      "goes above",
+      "gets bigger than"
+    ],
+    "LT": [
+      "is less than",
+      "is smaller than",
+      "is fewer than",
+      "is lower than",
+      "is below",
+      "is under"
+    ],
+    "GE": [
+      "is at least",
+      "is greater than or equal to",
+      "is not less than"
+    ],
+    "LE": [
+      "is at most",
+      "is less than or equal to",
+      "is not more than"
+    ],
+    "NE": [
+      "is not",
+      "does not equal",
+      "is different from"
+    ],
+    "AND": [
+      "and"
+    ],
+    "OR": [
+      "or"
+    ],
+    "NOT": [
+      "not"
+    ],
+    "CONCAT": [
+      "and then",
+      "followed by"
+    ],
+    "IT": [
+      "it"
+    ],
+    "END": [
+      "that is all",
+      "that is it",
+      "done",
+      "end"
+    ],
+    "MOD": [
+      "mod",
+      "modulo"
+    ],
+    "REPLY": [
+      "reply",
+      "replies",
+      "answer",
+      "respond",
+      "reply with",
+      "answer with",
+      "respond with",
+      "send back"
+    ],
+    "ON_MESSAGE": [
+      "when someone sends",
+      "when somebody sends",
+      "when anyone sends",
+      "when someone writes",
+      "when someone types",
+      "when someone says",
+      "when someone presses",
+      "when user sends",
+      "when they send",
+      "if someone sends"
+    ],
+    "BUTTONS": [
+      "with buttons",
+      "with button",
+      "with options",
+      "with choices"
+    ],
+    "MSG": [
+      "message",
+      "their message",
+      "what they sent",
+      "what they wrote"
+    ],
+    "NAME": [
+      "their name",
+      "their first name"
+    ],
+    "MSGNUM": [
+      "number they sent",
+      "number they wrote"
+    ],
+    "ANYTHING": [
+      "anything",
+      "anything else",
+      "something",
+      "something else"
+    ],
+    "CONTAINS": [
+      "contains",
+      "containing",
+      "that contains",
+      "which contains",
+      "includes",
+      "including"
+    ],
+    "STARTS": [
+      "starts with",
+      "starting with",
+      "that starts with",
+      "begins with",
+      "beginning with"
+    ],
+    "ONEOF": [
+      "one of",
+      "any of",
+      "randomly one of"
+    ],
+    "RANDOM": [
+      "random number"
+    ],
+    "REM": [
+      "remainder of"
+    ]
   },
-
   "symbols": {
-    "+": "PLUS", "-": "MINUS", "*": "MUL", "×": "MUL", "/": "DIV",
-    ">": "GT", "<": "LT", ">=": "GE", "<=": "LE", "=": "IS", "!=": "NE"
+    "+": "PLUS",
+    "-": "MINUS",
+    "*": "MUL",
+    "×": "MUL",
+    "/": "DIV",
+    ">": "GT",
+    "<": "LT",
+    ">=": "GE",
+    "<=": "LE",
+    "=": "IS",
+    "!=": "NE",
+    "%": "MOD"
   }
 }

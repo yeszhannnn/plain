@@ -12,17 +12,26 @@ Usage:
     engc.py ir    FILE            print LLVM IR        (alias: --emit-llvm)
     engc.py c     FILE            print C source       (alias: --emit-c)
     engc.py core  FILE            print Core IR        (alias: --dump-core)
+
+Telegram bots (programs with "when someone sends ...") read the token from the
+TELEGRAM_BOT_TOKEN environment variable.
 """
 
 import difflib
 import json
 import os
+import random
+import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+RUNTIME = os.path.join(HERE, "runtime", "plain_rt.c")
 
 
 class EngError(Exception):
@@ -55,7 +64,8 @@ class Lexicon:
             for form in forms:
                 self.phrases[tuple(form.split())] = kw
         self.max_phrase = max(len(p) for p in self.phrases)
-        self.print_forms = {p[0] for p, kw in self.phrases.items() if kw == "PRINT" and len(p) == 1}
+        self.phrase_starts = {p[:2] for p in self.phrases if len(p) > 1}
+        self.print_forms = {p[0] for p, kw in self.phrases.items() if kw in ("PRINT", "REPLY") and len(p) == 1}
         self.single_forms = sorted(p[0] for p in self.phrases if len(p) == 1)
 
 
@@ -72,9 +82,12 @@ class Tok:
         return f"{self.kind}({self.value!r})" if self.kind in ("WORD", "NUM", "STR") else self.kind
 
 
-BINOPS = {"PLUS": ("+", 1), "MINUS": ("-", 1), "MUL": ("*", 2), "TIMES": ("*", 2), "DIV": ("/", 2)}
-CMPOPS = {"GT": ">", "LT": "<", "GE": ">=", "LE": "<=", "NE": "!=", "IS": "=="}
-OP_WORDS = {"+": "plus", "-": "minus", "*": "times", "/": "divided by"}
+BINOPS = {"PLUS": ("+", 1), "MINUS": ("-", 1), "MUL": ("*", 2), "TIMES": ("*", 2), "DIV": ("/", 2),
+          "MOD": ("%", 2)}
+CMPOPS = {"GT": ">", "LT": "<", "GE": ">=", "LE": "<=", "NE": "!=", "IS": "==",
+          "CONTAINS": "contains", "STARTS": "starts"}
+OP_WORDS = {"+": "plus", "-": "minus", "*": "times", "/": "divided by", "%": "mod"}
+USER = "their."   # prefix of per-user variables: "their score" -> their.score
 
 
 @dataclass
@@ -162,7 +175,7 @@ def tokenize(s, line):
         elif s[i:i + 2] in (">=", "<=", "!="):
             toks.append(Tok("SYM", s[i:i + 2], s[i:i + 2]))
             i += 2
-        elif ch in "+-*×/<>=":
+        elif ch in "+-*×/<>=%":
             toks.append(Tok("SYM", ch, ch))
             i += 1
         elif ch == ",":
@@ -172,7 +185,7 @@ def tokenize(s, line):
             toks.append(Tok("LP" if ch == "(" else "RP", ch, ch))
             i += 1
         else:
-            raise EngError(f'I don\'t understand the symbol "{ch}".', line)
+            raise EngError(f'I don\'t understand the symbol "{ch}". Put it inside quotes if it is part of a text.', line)
     return toks
 
 
@@ -199,6 +212,8 @@ def normalize(toks, lx):
         j = i
         while j < len(toks) and toks[j].kind == "WORD":
             pieces = toks[j].value.split("-")
+            if pieces == ["one"] and j + 1 < len(toks) and toks[j + 1].value == "of":
+                break  # "one of ..." picks a random value
             if all(p in lx.numbers for p in pieces):
                 parts += pieces
                 j += 1
@@ -248,7 +263,8 @@ def normalize(toks, lx):
         prev = toks[i - 1] if i > 0 else None
         if t.kind == "WORD" and t.value in lx.label_words and nxt is not None and (
                 nxt.kind in ("STR", "NUM") or
-                (prev is not None and prev.kind == "WORD" and prev.value in lx.print_forms and nxt.kind == "WORD")):
+                (prev is not None and prev.kind == "WORD" and prev.value in lx.print_forms and nxt.kind == "WORD"
+                 and (t.value, nxt.value) not in lx.phrase_starts)):
             continue
         out.append(t)
     return out
@@ -278,7 +294,18 @@ def apply_lexicon(toks, lx):
                 continue
         out.append(t)
         i += 1
-    return out
+
+    # "their score": a variable that each Telegram user has separately
+    merged, i = [], 0
+    while i < len(out):
+        t = out[i]
+        if t.kind == "WORD" and t.value == "their" and i + 1 < len(out) and out[i + 1].kind == "WORD":
+            merged.append(Tok("WORD", USER + out[i + 1].value, f"{t.text} {out[i + 1].text}"))
+            i += 2
+        else:
+            merged.append(t)
+            i += 1
+    return merged
 
 
 # ───────────────────────────── Core IR ─────────────────────────────
@@ -292,6 +319,10 @@ class Num:
 class Text:
     value: str
     def __str__(self): return f"Text({json.dumps(self.value, ensure_ascii=False)})"
+
+@dataclass
+class Truth:
+    def __str__(self): return "Always"
 
 @dataclass
 class Var:
@@ -308,7 +339,7 @@ class Bin:
 
 @dataclass
 class Cmp:
-    op: str
+    op: str             # > < >= <= == != contains starts, and ~= (same text ignoring case)
     left: object
     right: object
     def __str__(self): return f"Cmp({self.op}, {self.left}, {self.right})"
@@ -318,6 +349,34 @@ class Logic:
     op: str             # and / or / not
     args: list
     def __str__(self): return f"{self.op.capitalize()}({', '.join(map(str, self.args))})"
+
+@dataclass
+class Random:
+    low: object
+    high: object
+    def __str__(self): return f"Random({self.low}, {self.high})"
+
+@dataclass
+class OneOf:
+    items: list
+    def __str__(self): return f"OneOf({', '.join(map(str, self.items))})"
+
+@dataclass
+class Msg:      # text of the message being handled
+    def __str__(self): return "Message"
+
+@dataclass
+class Name:     # sender's first name
+    def __str__(self): return "SenderName"
+
+@dataclass
+class MsgNum:   # the message read as a whole number
+    def __str__(self): return "MessageNumber"
+
+@dataclass
+class IsNum:
+    def __str__(self): return "MessageIsNumber"
+
 
 @dataclass
 class Assign:
@@ -339,6 +398,15 @@ class Print:
     parts: list
     line: int = 0
     def dump(self, ind): return [f"{ind}Print({', '.join(map(str, self.parts))})"]
+
+@dataclass
+class Reply:
+    parts: list
+    buttons: list = field(default_factory=list)
+    line: int = 0
+    def dump(self, ind):
+        b = f" Buttons({', '.join(map(str, self.buttons))})" if self.buttons else ""
+        return [f"{ind}Reply({', '.join(map(str, self.parts))}){b}"]
 
 @dataclass
 class Repeat:
@@ -366,6 +434,13 @@ class If:
             lines += [f"{ind}Else"] + dump_body(self.else_, ind)
         return lines
 
+@dataclass
+class Handler:
+    cond: object
+    body: list = field(default_factory=list)
+    line: int = 0
+    def dump(self, ind): return [f"{ind}OnMessage({self.cond})"] + dump_body(self.body, ind)
+
 
 def dump_body(body, ind):
     return [l for s in body for l in s.dump(ind + "  ")]
@@ -373,6 +448,10 @@ def dump_body(body, ind):
 
 def dump_program(prog):
     return "\n".join(l for s in prog for l in s.dump(""))
+
+
+def is_bot(prog):
+    return any(isinstance(s, Handler) for s in prog)
 
 
 # Markers for block headers produced by the sentence parser.
@@ -404,6 +483,21 @@ class Parser:
 
     # ── expressions ──
 
+    def item_list(self, toks, i):
+        """Values separated by commas, "and" or "or": one of "a", "b" and "c"."""
+        items = []
+        while True:
+            got = self.atoms(toks, i)
+            if not got:
+                break
+            e, i = got[0]
+            items.append(e)
+            if i < len(toks) and toks[i].kind in ("COMMA", "AND", "OR"):
+                i += 1
+            else:
+                break
+        return items, i
+
     def atoms(self, toks, i):
         if i >= len(toks):
             return []
@@ -414,6 +508,32 @@ class Parser:
             return [(Num(-toks[i + 1].value), i + 2)]
         if t.kind == "STR":
             return [(Text(t.value), i + 1)]
+        if t.kind == "MSG":
+            return [(Msg(), i + 1)]
+        if t.kind == "NAME":
+            return [(Name(), i + 1)]
+        if t.kind == "MSGNUM":
+            return [(MsgNum(), i + 1)]
+        if t.kind == "ONEOF":
+            items, j = self.item_list(toks, i + 1)
+            if len(items) < 2:
+                self.err('"One of" needs at least two choices, for example: one of "yes", "no" and "maybe".')
+            return [(OneOf(items), j)]
+        if t.kind == "RANDOM":
+            ok = i + 1 < len(toks) and toks[i + 1].kind == "FROM"
+            lo = self.atoms(toks, i + 2) if ok else []
+            if lo and lo[0][1] < len(toks) and toks[lo[0][1]].kind in ("TO", "AND"):
+                hi = self.atoms(toks, lo[0][1] + 1)
+                if hi:
+                    return [(Random(lo[0][0], hi[0][0]), hi[0][1])]
+            self.err('Write it like: a random number from 1 to 6.')
+        if t.kind == "REM":
+            a = self.atoms(toks, i + 1)
+            if a and a[0][1] < len(toks) and toks[a[0][1]].kind == "DIV":
+                b = self.atoms(toks, a[0][1] + 1)
+                if b:
+                    return [(Bin("%", a[0][0], b[0][0]), b[0][1])]
+            self.err('Write it like: the remainder of n divided by 3.')
         if t.kind == "IT":
             if self.last_var is None:
                 self.err('I don\'t know what "it" means here. Nothing has been set yet.')
@@ -519,6 +639,30 @@ class Parser:
             raise AmbiguityError(ambiguity_text([english_cond(c) for c in cands]), self.line)
         return cands[0]
 
+    def message_cond(self, toks):
+        """What a "when someone sends ..." rule waits for."""
+        kinds = [t.kind for t in toks]
+        if kinds in (["ANYTHING"], ["MSG"]):
+            return Truth()
+        if kinds == ["WORD"] and toks[0].value == "number":
+            return IsNum()
+        if toks and toks[0].kind in ("ANYTHING", "MSG"):
+            toks, kinds = toks[1:], kinds[1:]
+        if toks and toks[0].kind in ("CONTAINS", "STARTS"):
+            op = CMPOPS[toks[0].kind]
+            texts, j = self.item_list(toks, 1)
+            if j == len(toks) and texts and all(isinstance(x, Text) for x in texts):
+                tests = [Cmp(op, Msg(), x) for x in texts]
+                return tests[0] if len(tests) == 1 else Logic("or", tests)
+        elif toks and toks[0].kind == "STR":
+            texts, j = self.item_list(toks, 0)
+            if j == len(toks) and all(isinstance(x, Text) for x in texts):
+                tests = [Cmp("~=", Msg(), x) for x in texts]
+                return tests[0] if len(tests) == 1 else Logic("or", tests)
+        self.err('I don\'t understand which messages this rule is for. For example: '
+                 'when someone sends "/start", when someone sends a number, '
+                 'when someone sends a message that contains "price", when someone sends anything else.')
+
     # ── statements ──
 
     def target(self, tok):
@@ -539,6 +683,14 @@ class Parser:
         k = toks[0].kind
         if k == "END" and len(toks) == 1:
             return End()
+        if k == "ON_MESSAGE":
+            # the rule ends at the first comma that is not inside a list of texts
+            cut = next((i for i, t in enumerate(toks)
+                        if t.kind == "COMMA" and not (i + 1 < len(toks) and toks[i + 1].kind == "STR")), None)
+            cond = self.message_cond(toks[1:cut])
+            if cut is None:
+                return Handler(cond, line=self.line)                      # block follows
+            return Handler(cond, [self.sentence(strip_commas(toks[cut + 1:]))], line=self.line)
         if k == "OTHERWISE":
             rest = strip_commas(toks[1:])
             return ElseMark(self.sentence(rest) if rest else None)
@@ -575,6 +727,8 @@ class Parser:
         n = len(toks)
         if k == "PRINT":
             return self.print_stmt(toks)
+        if k == "REPLY":
+            return self.reply_stmt(toks)
         if k == "SET":
             to = next((i for i, t in enumerate(toks) if t.kind == "TO"), None)
             if to != 2:
@@ -638,6 +792,23 @@ class Parser:
             raise AmbiguityError(ambiguity_text([english_stmt(c, toks[0].value) for c in cands]), self.line)
         return cands[0]
 
+    def reply_stmt(self, toks):
+        b = next((i for i, t in enumerate(toks) if t.kind == "BUTTONS"), len(toks))
+        buttons = []
+        if b < len(toks):
+            buttons, j = self.item_list(toks, b + 1)
+            if not buttons or j != len(toks):
+                self.err('Write buttons like this: reply "Pick one" with buttons "yes", "no" and "maybe".')
+        cands = unique([parts for parts, j in self.print_args(toks[:b], 1) if j == b],
+                       key=lambda ps: ", ".join(map(str, ps)))
+        if not cands:
+            self.err(f'I couldn\'t understand what to reply: "{show(toks[:b])}". '
+                     'Put text with several words in quotes.')
+        if len(cands) > 1:
+            raise AmbiguityError(ambiguity_text(
+                ["reply " + " and then ".join(english_expr(p) for p in c) for c in cands]), self.line)
+        return Reply(cands[0], buttons, self.line)
+
 
 def split_top(toks, kind):
     parts, cur, depth = [], [], 0
@@ -685,17 +856,29 @@ def english_expr(e, top=True):
     if isinstance(e, Bin):
         s = f"{english_expr(e.left, False)} {OP_WORDS[e.op]} {english_expr(e.right, False)}"
         return s if top else f"({s})"
+    if isinstance(e, Msg):
+        return "the message"
+    if isinstance(e, Name):
+        return "their name"
+    if isinstance(e, MsgNum):
+        return "the number they sent"
+    if isinstance(e, Random):
+        return f"a random number from {english_expr(e.low)} to {english_expr(e.high)}"
+    if isinstance(e, OneOf):
+        return "one of " + ", ".join(english_expr(x) for x in e.items)
     return str(e)
 
 
 def english_cond(c):
     if isinstance(c, Cmp):
-        words = {">": "is more than", "<": "is less than", ">=": "is at least",
-                 "<=": "is at most", "!=": "is not", "==": "is"}
+        words = {">": "is more than", "<": "is less than", ">=": "is at least", "<=": "is at most",
+                 "!=": "is not", "==": "is", "~=": "is", "contains": "contains", "starts": "starts with"}
         return f"{english_expr(c.left)} {words[c.op]} {english_expr(c.right)}"
-    if c.op == "not":
-        return f"not ({english_cond(c.args[0])})"
-    return f" {c.op} ".join(f"({english_cond(a)})" for a in c.args)
+    if isinstance(c, Logic):
+        if c.op == "not":
+            return f"not ({english_cond(c.args[0])})"
+        return f" {c.op} ".join(f"({english_cond(a)})" for a in c.args)
+    return english_expr(c)
 
 
 def english_stmt(s, verb):
@@ -736,7 +919,6 @@ def parse_program(src, lx=None):
         while stack and stack[-1][2] and stack[-1][1]:
             stack.pop()   # a same-line body ("repeat 5 times: say hi") holds one sentence
 
-    pending_inline = False
     for item in split_sentences(src):
         if isinstance(item, Blank):
             if stack and stack[-1][1]:
@@ -765,11 +947,17 @@ def parse_program(src, lx=None):
             else:
                 stack.append(["else", prev.else_, item.header_colon, prev])
             continue
-        is_header = (isinstance(node, Repeat) and not node.body) or (isinstance(node, If) and not node.then)
+        if isinstance(node, Handler) and stack:
+            raise EngError('A "when someone sends" rule must start a new group, not sit inside another one. '
+                           'Close the group above with "that\'s all".', item.line)
+        is_header = (isinstance(node, Repeat) and not node.body) or \
+                    (isinstance(node, (If, Handler)) and not getattr(node, "then", None) and
+                     not getattr(node, "body", None))
         add(node)
         if is_header:
-            body = node.body if isinstance(node, Repeat) else node.then
-            stack.append(["then" if isinstance(node, If) else "repeat", body, item.header_colon, node])
+            body = node.then if isinstance(node, If) else node.body
+            kind = {If: "then", Repeat: "repeat", Handler: "handler"}[type(node)]
+            stack.append([kind, body, item.header_colon, node])
     return root
 
 
@@ -777,22 +965,54 @@ def parse_program(src, lx=None):
 
 INT, TEXT, BOOL = "Int", "Text", "Bool"
 TYPE_WORDS = {INT: "a number", TEXT: "text", BOOL: "yes/no"}
+MESSAGE_ONLY = '"{}" only exists inside a "when someone sends ..." rule.'
 
 
 class Types:
     def __init__(self):
         self.vars = {}    # name -> type
         self.where = {}   # name -> line of first assignment
+        self.in_handler = False
+
+    def slots(self):
+        """Per-user variables in a fixed order: their storage slot numbers."""
+        return {n: i for i, n in enumerate(n for n in self.vars if n.startswith(USER))}
+
+    def need_handler(self, what, line):
+        if not self.in_handler:
+            raise EngError(MESSAGE_ONLY.format(what), line)
 
     def expr(self, e, line):
         if isinstance(e, Num):
             return INT
         if isinstance(e, Text):
             return TEXT
+        if isinstance(e, Truth):
+            return BOOL
         if isinstance(e, Var):
+            if e.name.startswith(USER):
+                self.need_handler(e.display or e.name, line)
             if e.name not in self.vars:
                 raise EngError(f'"{e.display or e.name}" is used before it has a value.', line)
             return self.vars[e.name]
+        if isinstance(e, (Msg, Name)):
+            self.need_handler(english_expr(e), line)
+            return TEXT
+        if isinstance(e, MsgNum):
+            self.need_handler(english_expr(e), line)
+            return INT
+        if isinstance(e, IsNum):
+            return BOOL
+        if isinstance(e, Random):
+            if self.expr(e.low, line) != INT or self.expr(e.high, line) != INT:
+                raise EngError("A random number needs numbers on both ends.", line)
+            return INT
+        if isinstance(e, OneOf):
+            ts = {self.expr(x, line) for x in e.items}
+            if len(ts) != 1:
+                raise EngError(f'All choices in "{english_expr(e)}" must be the same kind: all text or all numbers.',
+                               line)
+            return ts.pop()
         if isinstance(e, Bin):
             l, r = self.expr(e.left, line), self.expr(e.right, line)
             if l != INT or r != INT:
@@ -804,7 +1024,9 @@ class Types:
             if l != r:
                 raise EngError(f'I can\'t compare {TYPE_WORDS[l]} with {TYPE_WORDS[r]} in '
                                f'"{english_cond(e)}".', line)
-            if e.op not in ("==", "!=") and l != INT:
+            if e.op in ("contains", "starts", "~=") and l != TEXT:
+                raise EngError(f'Only text can contain or start with something, in "{english_cond(e)}".', line)
+            if e.op in (">", "<", ">=", "<=") and l != INT:
                 raise EngError(f'Only numbers can be bigger or smaller, in "{english_cond(e)}".', line)
             return BOOL
         if isinstance(e, Logic):
@@ -814,11 +1036,13 @@ class Types:
         raise EngError(f"internal: unknown expression {e}", line)
 
     def bind(self, name, t, line):
+        if name.startswith(USER):
+            self.need_handler(name.replace(USER, "their "), line)
         old = self.vars.get(name)
         if old is None:
             self.vars[name], self.where[name] = t, line
         elif old != t:
-            raise EngError(f'"{name}" was {TYPE_WORDS[old]} on line {self.where[name]}, '
+            raise EngError(f'"{name.replace(USER, "their ")}" was {TYPE_WORDS[old]} on line {self.where[name]}, '
                            f'and here it would become {TYPE_WORDS[t]}. A name keeps one kind of value.', line)
 
     def block(self, body):
@@ -831,6 +1055,13 @@ class Types:
             elif isinstance(s, Print):
                 for part in s.parts:
                     self.expr(part, s.line)
+            elif isinstance(s, Reply):
+                self.need_handler("reply", s.line)
+                for part in s.parts:
+                    self.expr(part, s.line)
+                for b in s.buttons:
+                    if self.expr(b, s.line) != TEXT:
+                        raise EngError("Button labels must be text in quotes.", s.line)
             elif isinstance(s, Repeat):
                 if self.expr(s.count, s.line) != INT:
                     raise EngError("The number of times must be a number.", s.line)
@@ -842,11 +1073,17 @@ class Types:
                 self.expr(s.cond, s.line)
                 self.block(s.then)
                 self.block(s.else_ or [])
+            elif isinstance(s, Handler):
+                self.in_handler = True
+                self.expr(s.cond, s.line)
+                self.block(s.body)
+                self.in_handler = False
 
 
 def check(prog):
     t = Types()
-    t.block(prog)
+    t.block([s for s in prog if not isinstance(s, Handler)])   # setup runs first
+    t.block([s for s in prog if isinstance(s, Handler)])
     return t
 
 
@@ -855,9 +1092,36 @@ def compile_front(src):
     return prog, check(prog)
 
 
-# ───────────────────────────── Backend: interpreter ─────────────────────────────
+# ───────────────────────────── Shared semantics ─────────────────────────────
+# These mirror runtime/plain_rt.c exactly, so the interpreter and the native
+# binary print the same thing.
 
 ZERO = {INT: 0, TEXT: "", BOOL: False}
+NO_SPACE_BEFORE = ".,!?;:)"
+
+
+def join_parts(pieces):
+    out = ""
+    for s in pieces:
+        if not s:
+            continue
+        if out and not out[-1].isspace() and not s[0].isspace() and s[0] not in NO_SPACE_BEFORE:
+            out += " "
+        out += s
+    return out
+
+
+def ascii_lower(s):
+    return s.translate({c: c + 32 for c in range(65, 91)})
+
+
+def text_same(a, b):
+    return ascii_lower(a.strip()) == ascii_lower(b.strip())
+
+
+def as_number(text):
+    m = re.fullmatch(r"\s*([+-]?[0-9]{1,18})\s*", text)
+    return int(m.group(1)) if m else None
 
 
 def idiv(a, b):
@@ -873,21 +1137,118 @@ def fmt_value(v):
     return str(v)
 
 
+# ───────────────────────────── Backend: interpreter ─────────────────────────────
+
+class Telegram:
+    """Bot API client for the interpreter. Same behaviour as the C runtime."""
+
+    def __init__(self):
+        self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        if not self.token:
+            raise EngError("Set TELEGRAM_BOT_TOKEN to your bot's token first. "
+                           "You get one from @BotFather in Telegram.")
+        self.base = (os.environ.get("TELEGRAM_API_URL") or "https://api.telegram.org").rstrip("/")
+        self.idle_exit = "PLAIN_BOT_EXIT_WHEN_IDLE" in os.environ
+        self.offset = 0
+        self.pending = []
+        print("The bot is running. Press Ctrl+C to stop.", file=sys.stderr)
+
+    def call(self, method, payload):
+        req = urllib.request.Request(f"{self.base}/bot{self.token}/{method}",
+                                     data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=90) as r:
+                data = json.load(r)
+        except urllib.error.HTTPError as e:
+            data = json.load(e)
+        except (urllib.error.URLError, OSError) as e:
+            print(f"Network problem while talking to Telegram: {e}", file=sys.stderr)
+            return None
+        if not data.get("ok"):
+            raise EngError(f"Telegram refused the request: {data.get('description', 'unknown error')}")
+        return data
+
+    def next(self):
+        while True:
+            while self.pending:
+                u = self.pending.pop(0)
+                self.offset = max(self.offset, u.get("update_id", 0) + 1)
+                m = u.get("message") or {}
+                if not isinstance(m.get("text"), str) or "id" not in m.get("chat", {}):
+                    continue
+                name = (m.get("from") or {}).get("first_name", "")
+                print(f"[{name}] {m['text']}", file=sys.stderr)
+                return m["chat"]["id"], m["text"], name
+            data = self.call("getUpdates", {"offset": self.offset, "timeout": 0 if self.idle_exit else 30,
+                                            "allowed_updates": ["message"]})
+            if data is None:
+                if self.idle_exit:
+                    return None
+                time.sleep(3)
+                continue
+            self.pending = list(data.get("result", []))
+            if self.idle_exit and not self.pending:
+                return None
+
+    def send(self, chat, text, buttons):
+        payload = {"chat_id": chat, "text": text or " "}
+        if buttons:
+            rows = [[{"text": b} for b in buttons[i:i + 3]] for i in range(0, len(buttons), 3)]
+            payload["reply_markup"] = {"resize_keyboard": True, "keyboard": rows}
+        self.call("sendMessage", payload)
+
+
 def run(prog, types, out=sys.stdout):
-    env = {name: ZERO[t] for name, t in types.vars.items()}
+    env = {name: ZERO[t] for name, t in types.vars.items() if not name.startswith(USER)}
+    users = {}            # chat id -> that user's variables
+    ctx = {}              # chat, text, name of the message being handled
+
+    def user_vars():
+        return users.setdefault(ctx["chat"], {n: ZERO[t] for n, t in types.vars.items() if n.startswith(USER)})
+
+    def scope(name):
+        return user_vars() if name.startswith(USER) else env
 
     def ev(e):
-        if isinstance(e, Num):
+        if isinstance(e, (Num, Text)):
             return e.value
-        if isinstance(e, Text):
-            return e.value
+        if isinstance(e, Truth):
+            return True
         if isinstance(e, Var):
-            return env[e.name]
+            return scope(e.name)[e.name]
+        if isinstance(e, Msg):
+            return ctx["text"]
+        if isinstance(e, Name):
+            return ctx["name"]
+        if isinstance(e, MsgNum):
+            return as_number(ctx["text"]) or 0
+        if isinstance(e, IsNum):
+            return as_number(ctx["text"]) is not None
+        if isinstance(e, Random):
+            lo, hi = sorted((ev(e.low), ev(e.high)))
+            return random.randint(lo, hi)
+        if isinstance(e, OneOf):
+            return ev(random.choice(e.items))
         if isinstance(e, Bin):
             a, b = ev(e.left), ev(e.right)
-            return {"+": lambda: a + b, "-": lambda: a - b, "*": lambda: a * b, "/": lambda: idiv(a, b)}[e.op]()
+            if e.op == "+":
+                return a + b
+            if e.op == "-":
+                return a - b
+            if e.op == "*":
+                return a * b
+            if e.op == "/":
+                return idiv(a, b)
+            return a - b * idiv(a, b)       # remainder with C semantics
         if isinstance(e, Cmp):
             a, b = ev(e.left), ev(e.right)
+            if e.op == "~=":
+                return text_same(a, b)
+            if e.op == "contains":
+                return ascii_lower(b) in ascii_lower(a)
+            if e.op == "starts":
+                return ascii_lower(a).startswith(ascii_lower(b))
             return {">": a > b, "<": a < b, ">=": a >= b, "<=": a <= b, "==": a == b, "!=": a != b}[e.op]
         if isinstance(e, Logic):
             if e.op == "not":
@@ -898,11 +1259,14 @@ def run(prog, types, out=sys.stdout):
     def ex(body):
         for s in body:
             if isinstance(s, Assign):
-                env[s.name] = ev(s.expr)
+                scope(s.name)[s.name] = ev(s.expr)
             elif isinstance(s, Update):
-                env[s.name] = ev(Bin(s.op, Var(s.name), s.expr))
+                scope(s.name)[s.name] = ev(Bin(s.op, Var(s.name), s.expr))
             elif isinstance(s, Print):
-                out.write(" ".join(fmt_value(ev(p)) for p in s.parts) + "\n")
+                out.write(join_parts(fmt_value(ev(p)) for p in s.parts) + "\n")
+                out.flush()
+            elif isinstance(s, Reply):
+                bot.send(ctx["chat"], join_parts(fmt_value(ev(p)) for p in s.parts), [ev(b) for b in s.buttons])
             elif isinstance(s, Repeat):
                 for _ in range(ev(s.count)):
                     ex(s.body)
@@ -912,10 +1276,47 @@ def run(prog, types, out=sys.stdout):
             elif isinstance(s, If):
                 ex(s.then if ev(s.cond) else (s.else_ or []))
 
-    ex(prog)
+    ex([s for s in prog if not isinstance(s, Handler)])
+    handlers = [s for s in prog if isinstance(s, Handler)]
+    if not handlers:
+        return
+    bot = Telegram()
+    while True:
+        msg = bot.next()
+        if msg is None:
+            return
+        ctx["chat"], ctx["text"], ctx["name"] = msg
+        for h in handlers:          # the first rule that matches wins
+            if ev(h.cond):
+                ex(h.body)
+                break
 
 
 # ───────────────────────────── Backend: C ─────────────────────────────
+
+C_PRELUDE = """\
+/* generated by engc; link with runtime/plain_rt.c */
+void pl_init(void);
+void pl_out_text(const char *s);
+void pl_out_int(long long v);
+void pl_out_print(void);
+int pl_text_cmp(const char *a, const char *b);
+int pl_text_same(const char *a, const char *b);
+int pl_contains(const char *h, const char *n);
+int pl_starts(const char *h, const char *n);
+char *pl_keep(const char *s);
+long long pl_random(long long lo, long long hi);
+void pl_bot_start(int slots);
+int pl_bot_next(void);
+const char *pl_msg_text(void);
+const char *pl_msg_name(void);
+int pl_msg_is_number(void);
+long long pl_msg_number(void);
+void *pl_user_slot(int k);
+void pl_button(const char *s);
+void pl_out_reply(void);
+"""
+
 
 def c_name(name):
     return "v_" + "".join(ch if ch.isalnum() else "_" for ch in name)
@@ -924,25 +1325,54 @@ def c_name(name):
 def emit_c(prog, types):
     ctype = {INT: "long long", TEXT: "const char *", BOOL: "int"}
     czero = {INT: "0", TEXT: '""', BOOL: "0"}
-    lines = ["#include <stdio.h>", "#include <string.h>", "", "int main(void) {"]
+    slots = types.slots()
+    lines = [C_PRELUDE, "int main(void) {", "    pl_init();"]
     for name, t in types.vars.items():
-        lines.append(f"    {ctype[t]} {c_name(name)} = {czero[t]};")
+        if not name.startswith(USER):
+            lines.append(f"    {ctype[t]} {c_name(name)} = {czero[t]};")
 
     def ty(e):
+        types.in_handler = True
         return types.expr(e, 0)
+
+    def var(name):
+        if name.startswith(USER):
+            return f"(*({ctype[types.vars[name]]} *)pl_user_slot({slots[name]}))"
+        return c_name(name)
 
     def ce(e):
         if isinstance(e, Num):
             return f"{e.value}LL"
         if isinstance(e, Text):
             return json.dumps(e.value)
+        if isinstance(e, Truth):
+            return "1"
         if isinstance(e, Var):
-            return c_name(e.name)
+            return var(e.name)
+        if isinstance(e, Msg):
+            return "pl_msg_text()"
+        if isinstance(e, Name):
+            return "pl_msg_name()"
+        if isinstance(e, MsgNum):
+            return "pl_msg_number()"
+        if isinstance(e, IsNum):
+            return "pl_msg_is_number()"
+        if isinstance(e, Random):
+            return f"pl_random({ce(e.low)}, {ce(e.high)})"
+        if isinstance(e, OneOf):
+            t = ctype[ty(e)]
+            return f"(({t}[]){{{', '.join(ce(x) for x in e.items)}}})[pl_random(0, {len(e.items) - 1})]"
         if isinstance(e, Bin):
             return f"({ce(e.left)} {e.op} {ce(e.right)})"
         if isinstance(e, Cmp):
+            if e.op == "~=":
+                return f"pl_text_same({ce(e.left)}, {ce(e.right)})"
+            if e.op == "contains":
+                return f"pl_contains({ce(e.left)}, {ce(e.right)})"
+            if e.op == "starts":
+                return f"pl_starts({ce(e.left)}, {ce(e.right)})"
             if ty(e.left) == TEXT:
-                return f"(strcmp({ce(e.left)}, {ce(e.right)}) {e.op} 0)"
+                return f"(pl_text_cmp({ce(e.left)}, {ce(e.right)}) {e.op} 0)"
             return f"({ce(e.left)} {e.op} {ce(e.right)})"
         if isinstance(e, Logic):
             if e.op == "not":
@@ -951,19 +1381,33 @@ def emit_c(prog, types):
 
     counter = [0]
 
+    def out_parts(parts, ind):
+        for p in parts:
+            t = ty(p)
+            if t == INT:
+                lines.append(f"{ind}pl_out_int({ce(p)});")
+            elif t == BOOL:
+                lines.append(f'{ind}pl_out_text({ce(p)} ? "true" : "false");')
+            else:
+                lines.append(f"{ind}pl_out_text({ce(p)});")
+
     def cs(body, ind):
         for s in body:
             if isinstance(s, Assign):
-                lines.append(f"{ind}{c_name(s.name)} = {ce(s.expr)};")
+                v = ce(s.expr)
+                if types.vars[s.name] == TEXT and not isinstance(s.expr, Text):
+                    v = f"pl_keep({v})"
+                lines.append(f"{ind}{var(s.name)} = {v};")
             elif isinstance(s, Update):
-                lines.append(f"{ind}{c_name(s.name)} = {ce(Bin(s.op, Var(s.name), s.expr))};")
+                lines.append(f"{ind}{var(s.name)} = {ce(Bin(s.op, Var(s.name), s.expr))};")
             elif isinstance(s, Print):
-                fmt, args = [], []
-                for p in s.parts:
-                    t = ty(p)
-                    fmt.append("%lld" if t == INT else "%s")
-                    args.append(f'({ce(p)} ? "true" : "false")' if t == BOOL else ce(p))
-                lines.append(f'{ind}printf({json.dumps(" ".join(fmt) + chr(10))}, {", ".join(args)});')
+                out_parts(s.parts, ind)
+                lines.append(f"{ind}pl_out_print();")
+            elif isinstance(s, Reply):
+                out_parts(s.parts, ind)
+                for b in s.buttons:
+                    lines.append(f"{ind}pl_button({ce(b)});")
+                lines.append(f"{ind}pl_out_reply();")
             elif isinstance(s, Repeat):
                 counter[0] += 1
                 i = f"i{counter[0]}"
@@ -982,7 +1426,14 @@ def emit_c(prog, types):
                     cs(s.else_, ind + "    ")
                 lines.append(f"{ind}}}")
 
-    cs(prog, "    ")
+    cs([s for s in prog if not isinstance(s, Handler)], "    ")
+    handlers = [s for s in prog if isinstance(s, Handler)]
+    if handlers:
+        lines += [f"    pl_bot_start({len(slots)});", "    while (pl_bot_next()) {"]
+        for k, h in enumerate(handlers):
+            lines.append(f"        {'if' if k == 0 else '} else if'} ({ce(h.cond)}) {{")
+            cs(h.body, "            ")
+        lines += ["        }", "    }"]
     lines += ["    return 0;", "}", ""]
     return "\n".join(lines)
 
@@ -991,10 +1442,32 @@ def emit_c(prog, types):
 
 LLTYPE = {INT: "i64", TEXT: "ptr", BOOL: "i1"}
 
+LL_DECLS = """\
+declare void @pl_init()
+declare void @pl_out_text(ptr)
+declare void @pl_out_int(i64)
+declare void @pl_out_print()
+declare i32 @pl_text_cmp(ptr, ptr)
+declare i32 @pl_text_same(ptr, ptr)
+declare i32 @pl_contains(ptr, ptr)
+declare i32 @pl_starts(ptr, ptr)
+declare ptr @pl_keep(ptr)
+declare i64 @pl_random(i64, i64)
+declare void @pl_bot_start(i32)
+declare i32 @pl_bot_next()
+declare ptr @pl_msg_text()
+declare ptr @pl_msg_name()
+declare i32 @pl_msg_is_number()
+declare i64 @pl_msg_number()
+declare ptr @pl_user_slot(i32)
+declare void @pl_button(ptr)
+declare void @pl_out_reply()"""
+
 
 class LLVMGen:
     def __init__(self, types):
         self.types = types
+        self.slots = types.slots()
         self.globals = {}   # string -> global name
         self.body = []
         self.allocas = []
@@ -1020,36 +1493,77 @@ class LLVMGen:
             self.globals[s] = f"@.s{len(self.globals)}"
         return self.globals[s]
 
-    @staticmethod
-    def var(name):
+    def ty(self, e):
+        self.types.in_handler = True
+        return self.types.expr(e, 0)
+
+    def addr(self, name):
+        if name.startswith(USER):
+            p = self.t()
+            self.emit(f"{p} = call ptr @pl_user_slot(i32 {self.slots[name]})")
+            return p
         return "%v." + "".join(ch if ch.isalnum() or ch in "._" else "_" for ch in name)
 
-    def ty(self, e):
-        return self.types.expr(e, 0)
+    def call_bool(self, fn, args):
+        r, b = self.t(), self.t()
+        self.emit(f"{r} = call i32 @{fn}({args})")
+        self.emit(f"{b} = icmp ne i32 {r}, 0")
+        return b
 
     def expr(self, e):
         if isinstance(e, Num):
             return str(e.value)
         if isinstance(e, Text):
             return self.string(e.value)
+        if isinstance(e, Truth):
+            return "true"
         if isinstance(e, Var):
+            a = self.addr(e.name)
             r = self.t()
-            self.emit(f"{r} = load {LLTYPE[self.types.vars[e.name]]}, ptr {self.var(e.name)}")
+            self.emit(f"{r} = load {LLTYPE[self.types.vars[e.name]]}, ptr {a}")
             return r
+        if isinstance(e, (Msg, Name, MsgNum)):
+            fn, rt = {Msg: ("pl_msg_text", "ptr"), Name: ("pl_msg_name", "ptr"),
+                      MsgNum: ("pl_msg_number", "i64")}[type(e)]
+            r = self.t()
+            self.emit(f"{r} = call {rt} @{fn}()")
+            return r
+        if isinstance(e, IsNum):
+            return self.call_bool("pl_msg_is_number", "")
+        if isinstance(e, Random):
+            lo, hi = self.expr(e.low), self.expr(e.high)
+            r = self.t()
+            self.emit(f"{r} = call i64 @pl_random(i64 {lo}, i64 {hi})")
+            return r
+        if isinstance(e, OneOf):
+            lt = LLTYPE[self.ty(e)]
+            vals = [self.expr(x) for x in e.items]
+            idx = self.t()
+            self.emit(f"{idx} = call i64 @pl_random(i64 0, i64 {len(vals) - 1})")
+            acc = vals[-1]
+            for k in range(len(vals) - 2, -1, -1):
+                c, r = self.t(), self.t()
+                self.emit(f"{c} = icmp eq i64 {idx}, {k}")
+                self.emit(f"{r} = select i1 {c}, {lt} {vals[k]}, {lt} {acc}")
+                acc = r
+            return acc
         if isinstance(e, Bin):
             a, b = self.expr(e.left), self.expr(e.right)
             r = self.t()
-            op = {"+": "add", "-": "sub", "*": "mul", "/": "sdiv"}[e.op]
+            op = {"+": "add", "-": "sub", "*": "mul", "/": "sdiv", "%": "srem"}[e.op]
             self.emit(f"{r} = {op} i64 {a}, {b}")
             return r
         if isinstance(e, Cmp):
             lt = self.ty(e.left)
             a, b = self.expr(e.left), self.expr(e.right)
+            special = {"~=": "pl_text_same", "contains": "pl_contains", "starts": "pl_starts"}
+            if e.op in special:
+                return self.call_bool(special[e.op], f"ptr {a}, ptr {b}")
             pred = {">": "sgt", "<": "slt", ">=": "sge", "<=": "sle", "==": "eq", "!=": "ne"}[e.op]
             r = self.t()
             if lt == TEXT:
                 c = self.t()
-                self.emit(f"{c} = call i32 @strcmp(ptr {a}, ptr {b})")
+                self.emit(f"{c} = call i32 @pl_text_cmp(ptr {a}, ptr {b})")
                 self.emit(f"{r} = icmp {pred} i32 {c}, 0")
             else:
                 self.emit(f"{r} = icmp {pred} {LLTYPE[lt]} {a}, {b}")
@@ -1067,32 +1581,40 @@ class LLVMGen:
                 acc = r
             return acc
 
+    def out_parts(self, parts):
+        for p in parts:
+            t = self.ty(p)
+            v = self.expr(p)
+            if t == INT:
+                self.emit(f"call void @pl_out_int(i64 {v})")
+                continue
+            if t == BOOL:
+                r = self.t()
+                self.emit(f"{r} = select i1 {v}, ptr {self.string('true')}, ptr {self.string('false')}")
+                v = r
+            self.emit(f"call void @pl_out_text(ptr {v})")
+
     def block(self, body):
         for s in body:
             if isinstance(s, Assign):
+                t = self.types.vars[s.name]
                 v = self.expr(s.expr)
-                self.emit(f"store {LLTYPE[self.types.vars[s.name]]} {v}, ptr {self.var(s.name)}")
+                if t == TEXT and not isinstance(s.expr, Text):
+                    k = self.t()
+                    self.emit(f"{k} = call ptr @pl_keep(ptr {v})")
+                    v = k
+                self.emit(f"store {LLTYPE[t]} {v}, ptr {self.addr(s.name)}")
             elif isinstance(s, Update):
                 v = self.expr(Bin(s.op, Var(s.name), s.expr))
-                self.emit(f"store i64 {v}, ptr {self.var(s.name)}")
+                self.emit(f"store i64 {v}, ptr {self.addr(s.name)}")
             elif isinstance(s, Print):
-                fmt, args = [], []
-                for p in s.parts:
-                    t = self.ty(p)
-                    v = self.expr(p)
-                    if t == INT:
-                        fmt.append("%lld")
-                        args.append(f"i64 {v}")
-                    else:
-                        if t == BOOL:
-                            r = self.t()
-                            self.emit(f"{r} = select i1 {v}, ptr {self.string('true')}, ptr {self.string('false')}")
-                            v = r
-                        fmt.append("%s")
-                        args.append(f"ptr {v}")
-                f = self.string(" ".join(fmt) + "\n")
-                r = self.t()
-                self.emit(f"{r} = call i32 (ptr, ...) @printf(ptr {f}, {', '.join(args)})")
+                self.out_parts(s.parts)
+                self.emit("call void @pl_out_print()")
+            elif isinstance(s, Reply):
+                self.out_parts(s.parts)
+                for b in s.buttons:
+                    self.emit(f"call void @pl_button(ptr {self.expr(b)})")
+                self.emit("call void @pl_out_reply()")
             elif isinstance(s, Repeat):
                 n = self.expr(s.count)
                 ctr = f"%rep{self.lbl + 1}"
@@ -1136,21 +1658,46 @@ class LLVMGen:
                 self.emit(f"br label %{done}")
                 self.start(done)
 
+    def bot_loop(self, handlers):
+        self.emit(f"call void @pl_bot_start(i32 {len(self.slots)})")
+        poll, done = self.label("bot.poll"), self.label("bot.stop")
+        self.emit(f"br label %{poll}")
+        self.start(poll)
+        got = self.call_bool("pl_bot_next", "")
+        first = self.label("rule")
+        self.emit(f"br i1 {got}, label %{first}, label %{done}")
+        self.start(first)
+        for h in handlers:      # the first rule that matches wins
+            c = self.expr(h.cond)
+            body, nxt = self.label("rule.body"), self.label("rule")
+            self.emit(f"br i1 {c}, label %{body}, label %{nxt}")
+            self.start(body)
+            self.block(h.body)
+            self.emit(f"br label %{poll}")
+            self.start(nxt)
+        self.emit(f"br label %{poll}")
+        self.start(done)
+
     def module(self, prog):
         empty = self.string("")
-        self.block(prog)
+        self.emit("call void @pl_init()")
+        self.block([s for s in prog if not isinstance(s, Handler)])
+        handlers = [s for s in prog if isinstance(s, Handler)]
+        if handlers:
+            self.bot_loop(handlers)
         init = []
         for name, t in self.types.vars.items():
-            self.allocas.insert(0, f"{self.var(name)} = alloca {LLTYPE[t]}")
-            init.append(f"store {LLTYPE[t]} {dict([(INT, '0'), (TEXT, empty), (BOOL, 'false')])[t]}, "
-                        f"ptr {self.var(name)}")
-        out = ["; generated by engc from Plain source", ""]
+            if name.startswith(USER):
+                continue
+            a = self.addr(name)
+            self.allocas.insert(0, f"{a} = alloca {LLTYPE[t]}")
+            init.append(f"store {LLTYPE[t]} {dict([(INT, '0'), (TEXT, empty), (BOOL, 'false')])[t]}, ptr {a}")
+        out = ["; generated by engc from Plain source; link with runtime/plain_rt.c", ""]
         for s, g in self.globals.items():
             data = s.encode("utf-8") + b"\0"
             enc = "".join(chr(b) if 32 <= b < 127 and chr(b) not in '"\\' else f"\\{b:02X}" for b in data)
             out.append(f'{g} = private unnamed_addr constant [{len(data)} x i8] c"{enc}"')
-        out += ["", "declare i32 @printf(ptr, ...)", "declare i32 @strcmp(ptr, ptr)", "",
-                "define i32 @main() {", "entry:"]
+        out += ["", LL_DECLS, "", "define i32 @main() {", "entry:"]
         out += ["  " + a for a in self.allocas] + ["  " + s for s in init]
         out += self.body
         out += ["  ret i32 0", "}", ""]
@@ -1161,13 +1708,18 @@ def emit_llvm(prog, types):
     return LLVMGen(types).module(prog)
 
 
+def link_flags(prog):
+    return ["-DPLAIN_TELEGRAM", "-lcurl"] if is_bot(prog) else []
+
+
 def build(prog, types, output):
     ir = emit_llvm(prog, types)
     with tempfile.TemporaryDirectory() as d:
         ll = os.path.join(d, "out.ll")
         with open(ll, "w") as f:
             f.write(ir)
-        subprocess.run(["clang", "-O2", "-Wno-override-module", ll, "-o", output], check=True)
+        subprocess.run(["clang", "-O2", "-Wno-override-module", ll, RUNTIME, "-o", output] + link_flags(prog),
+                       check=True)
 
 
 # ───────────────────────────── CLI ─────────────────────────────
@@ -1203,6 +1755,8 @@ def main(argv):
         where = f"{os.path.basename(path)}, line {e.line}" if e.line else os.path.basename(path)
         print(f"{where}:\n{e.message}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        return 130
     return 0
 
 

@@ -59,6 +59,69 @@ Plain берёт у них идею, но отличается в одном п�
 
 ---
 
+## Часть 1.5. Telegram-боты
+
+Если в программе есть хоть одно правило `when someone sends …`, она становится ботом. Пример целиком (`examples/bots/guess.eng`):
+
+```text
+when someone sends "/start"
+  set their secret to a random number from 1 to 100.
+  set their tries to 0.
+  reply "I picked a number from 1 to 100. Guess it!".
+that's all.
+
+when someone sends a number
+  add 1 to their tries.
+  if the number they sent is more than their secret, reply "Lower.".
+  otherwise, if the number they sent is less than their secret, reply "Higher.".
+  otherwise
+    reply "Yes! You needed" and then their tries and then "tries. I picked a new number.".
+    set their secret to a random number from 1 to 100.
+    set their tries to 0.
+  that's all.
+that's all.
+
+when someone sends anything else, reply "Send me a number, or /start to begin.".
+```
+
+Что есть в языке для ботов:
+
+| Фраза | Что делает |
+|---|---|
+| `when someone sends "/start", …` | правило для конкретного сообщения; регистр и пробелы по краям не важны |
+| `when someone sends "hi", "hello" or "hey"` | любое из нескольких сообщений |
+| `when someone sends a number` | сообщение, которое целиком является числом |
+| `when someone sends a message that contains "price"` | сообщение содержит текст (также `starts with`) |
+| `when someone sends anything else` | всё остальное |
+| `reply "text" and then their name` | ответить тому, кто написал |
+| `reply "Pick one" with buttons "yes", "no" and "maybe"` | ответ с кнопками; нажатие кнопки приходит как обычное сообщение с её текстом |
+| `the message`, `their name`, `the number they sent` | текст сообщения, имя отправителя, сообщение как число |
+| `their score`, `their tries` | память о каждом пользователе отдельно |
+| `set total to 0` (без `their`) | общая память для всех пользователей |
+| `one of "a", "b" and "c"` | случайный выбор |
+| `a random number from 1 to 6` | случайное число |
+| `the remainder of n divided by 3`, `n mod 3` | остаток от деления |
+
+Правила проверяются сверху вниз, срабатывает первое подходящее. Предложения вне правил (`set total to 0.`) выполняются один раз при запуске. `reply`, `the message` и `their …` вне правила дают ошибку компиляции, потому что там нет сообщения, на которое можно ответить.
+
+Запуск:
+
+```bash
+export TELEGRAM_BOT_TOKEN=123456:ABC...      # токен от @BotFather
+python3 engc.py run examples/bots/guess.eng  # интерпретатор
+python3 engc.py build examples/bots/guess.eng -o guess && ./guess   # нативный бинарник, нужен libcurl
+```
+
+Ограничения текущей версии:
+- память (`their …` и общие переменные) живёт, пока работает процесс; после перезапуска бот всё забывает;
+- бот понимает только текстовые сообщения, фото и стикеры пропускаются;
+- сравнение без учёта регистра работает для латиницы; для кириллицы `"Кофе"` и `"кофе"` пока разные слова;
+- пустая строка внутри правила закрывает его, как и `that's all`.
+
+Под капотом бинарник содержит рантайм `runtime/plain_rt.c`: long polling через `getUpdates`, отправку через `sendMessage`, небольшой разборщик JSON и таблицу пользователей. Ни Python, ни внешних сервисов, кроме самого Telegram, ему не нужно. Для тестов есть фейковый сервер Telegram (`tests/mock_telegram.py`), адрес API подменяется переменной `TELEGRAM_API_URL`.
+
+---
+
 ## Часть 2. Грамматика и карта синонимов (внутри компилятора)
 
 ### 2.1 Стадии фронтенда
@@ -327,4 +390,4 @@ repeat.end3:
 | M3 | списки, `for every`, `count from … to`, записи, пользовательские глаголы и прилагательные, функции | можно написать FizzBuzz и сортировку списка без единого знака препинания, кроме точки |
 | M4 | LSP, `engfmt`, подсказки фраз, показ разрешения `it` при наведении | редактор подсвечивает неоднозначность до компиляции |
 
-Что прототип пока не умеет: списки и `for every`, записи с полями, дробные числа, ввод данных, пользовательские глаголы. Всё это относится к M3.
+Что прототип пока не умеет: списки и `for every`, записи с полями, дробные числа, пользовательские глаголы, сохранение памяти бота на диск, inline-кнопки под сообщением и рассылку всем пользователям. Всё это относится к M3.

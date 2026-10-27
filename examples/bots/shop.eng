@@ -1,0 +1,8 @@
+when someone sends "/start" or "menu", reply "What do you want to know?" with buttons "Prices", "Hours" and "Contact".
+
+when someone sends "prices", reply "Coffee 900 tenge, tea 600 tenge.".
+when someone sends "hours", reply "We are open every day from 9:00 to 21:00.".
+when someone sends "contact", reply "Call us: +7 700 000 00 00.".
+
+when someone sends a message that contains "coffee" or "кофе", reply "Coffee is 900 tenge. Come by!".
+when someone sends anything else, reply "Press one of the buttons." with buttons "Prices", "Hours" and "Contact".
