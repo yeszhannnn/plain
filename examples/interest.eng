@@ -1,0 +1,9 @@
+set money to 1000.
+set years to 0.
+do the following 30 times.
+  if money is less than 2000
+    set money to money + money * 7 / 100.
+    add 1 to years.
+  that's all.
+that's all.
+say "doubled after" and then years and then "years:" and then money.
