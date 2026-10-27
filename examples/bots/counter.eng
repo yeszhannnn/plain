@@ -1,0 +1,16 @@
+set total to 0.
+
+when someone sends "/start", reply "Hi" and then their name and then "! Press a button." with buttons "+1" and "reset".
+
+when someone sends "+1"
+  add 1 to their count.
+  add 1 to total.
+  reply "Your count is" and then their count and then ". All users together:" and then total and then ".".
+that's all.
+
+when someone sends "reset"
+  set their count to 0.
+  reply "Your count is back to 0.".
+that's all.
+
+when someone sends anything else, reply "Press a button." with buttons "+1" and "reset".

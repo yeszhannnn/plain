@@ -1,0 +1,2 @@
+when someone sends "/start", reply "Hi" and then their name and then "! Send me anything and I will repeat it.".
+when someone sends anything, reply "You said:" and then the message.
