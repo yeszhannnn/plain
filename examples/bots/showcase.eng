@@ -1,0 +1,169 @@
+set total to 0.
+
+when someone sends "/start", "menu" or "/menu"
+  set their mode to "menu".
+  reply "Hi" and then their name and then "! Every program in this bot is written in Plain, a programming language where code is plain English. Pick one:" with buttons "Doubler", "Echo", "Counter", "Guess the number", "Magic 8 ball", "Coffee shop", "Times table", "Collatz", "Savings", "FizzBuzz", "Countdown" and "Hello".
+that's all.
+
+when someone sends "Doubler"
+  set their mode to "doubler".
+  reply "Send me a number and I will double it." with buttons "Menu".
+that's all.
+
+when someone sends "Echo"
+  set their mode to "echo".
+  reply "Send me anything and I will repeat it." with buttons "Menu".
+that's all.
+
+when someone sends "+1"
+  add 1 to their count.
+  add 1 to total.
+  reply "Your count is" and then their count and then ". All users together:" and then total and then "." with buttons "+1", "Reset" and "Menu".
+that's all.
+
+when someone sends "Reset"
+  set their count to 0.
+  reply "Your count is back to 0." with buttons "+1", "Reset" and "Menu".
+that's all.
+
+when someone sends "Counter"
+  set their mode to "counter".
+  reply "Your count is" and then their count and then ". Press +1." with buttons "+1", "Reset" and "Menu".
+that's all.
+
+when someone sends "Guess the number"
+  set their mode to "guess".
+  set their secret to a random number from 1 to 100.
+  set their tries to 0.
+  reply "I picked a number from 1 to 100. Guess it!" with buttons "Menu".
+that's all.
+
+when someone sends "Magic 8 ball"
+  set their mode to "magic8".
+  reply "Ask me a yes or no question." with buttons "Menu".
+that's all.
+
+when someone sends "Coffee shop"
+  set their mode to "shop".
+  reply "Welcome to Plain Coffee. What do you want to know?" with buttons "Prices", "Hours", "Contact" and "Menu".
+that's all.
+
+when someone sends "Times table"
+  set their mode to "table".
+  reply "Send me a number and I will write its times table." with buttons "Menu".
+that's all.
+
+when someone sends "Collatz"
+  set their mode to "collatz".
+  reply "Send me a number. If it is even I halve it, if it is odd I take 3n + 1, until I reach 1." with buttons "Menu".
+that's all.
+
+when someone sends "Savings"
+  set their mode to "savings".
+  reply "Send me an amount of money. I will count how many years it takes to double at 7% a year." with buttons "Menu".
+that's all.
+
+when someone sends "FizzBuzz"
+  set their result to "FizzBuzz from 1 to 15:".
+  set their i to 1.
+  do the following 15 times.
+    if the remainder of their i divided by 15 is 0, set their result to their result and then a new line and then "FizzBuzz".
+    otherwise, if the remainder of their i divided by 3 is 0, set their result to their result and then a new line and then "Fizz".
+    otherwise, if the remainder of their i divided by 5 is 0, set their result to their result and then a new line and then "Buzz".
+    otherwise set their result to their result and then a new line and then their i.
+    increase their i by 1.
+  that's all.
+  reply their result with buttons "Menu".
+that's all.
+
+when someone sends "Countdown"
+  set their result to "Countdown:".
+  set their i to 10.
+  do the following 10 times.
+    set their result to their result and then a new line and then their i.
+    decrease their i by 1.
+  that's all.
+  reply their result and then a new line and then "Liftoff!" with buttons "Menu".
+that's all.
+
+when someone sends "Hello"
+  set their result to "Hello".
+  repeat 4 times: set their result to their result and then a new line and then "Hello"
+  reply their result with buttons "Menu".
+that's all.
+
+when someone sends "Prices", reply "Coffee 900 tenge, tea 600 tenge." with buttons "Prices", "Hours", "Contact" and "Menu".
+when someone sends "Hours", reply "Open every day from 9:00 to 21:00." with buttons "Prices", "Hours", "Contact" and "Menu".
+when someone sends "Contact", reply "Call us: +7 700 000 00 00." with buttons "Prices", "Hours", "Contact" and "Menu".
+
+when someone sends a number
+  if their mode is "doubler", reply "Twice that is" and then the number they sent times 2 and then "." with buttons "Menu".
+  otherwise, if their mode is "guess"
+    add 1 to their tries.
+    if the number they sent is more than their secret, reply "Lower." with buttons "Menu".
+    otherwise, if the number they sent is less than their secret, reply "Higher." with buttons "Menu".
+    otherwise
+      reply "Yes! You needed" and then their tries and then "tries. I picked a new number." with buttons "Menu".
+      set their secret to a random number from 1 to 100.
+      set their tries to 0.
+    that's all.
+  that's all.
+  otherwise, if their mode is "table"
+    set their result to "Times table for" and then the number they sent and then ":".
+    set their i to 1.
+    do the following 10 times.
+      set their result to their result and then a new line and then the number they sent and then "×" and then their i and then "=" and then the number they sent times their i.
+      increase their i by 1.
+    that's all.
+    reply their result with buttons "Menu".
+  that's all.
+  otherwise, if their mode is "collatz"
+    if the number they sent is less than 1, reply "Send a number from 1 to 1000000." with buttons "Menu".
+    otherwise, if the number they sent is more than 1000000, reply "Send a number from 1 to 1000000." with buttons "Menu".
+    otherwise
+      set their n to the number they sent.
+      set their steps to 0.
+      set their highest to their n.
+      do the following 1000 times.
+        if their n is more than 1
+          if the remainder of their n divided by 2 is 0, halve their n.
+          otherwise set their n to 3 * their n + 1.
+          add 1 to their steps.
+          if their n is more than their highest, set their highest to their n.
+        that's all.
+      that's all.
+      reply "From" and then the number they sent and then "it takes" and then their steps and then "steps to reach 1. The highest number on the way is" and then their highest and then "." with buttons "Menu".
+    that's all.
+  that's all.
+  otherwise, if their mode is "savings"
+    if the number they sent is less than 100, reply "Send at least 100." with buttons "Menu".
+    otherwise
+      set their money to the number they sent.
+      set their years to 0.
+      do the following 100 times.
+        if their money is less than the number they sent times 2
+          set their money to their money + their money * 7 / 100.
+          add 1 to their years.
+        that's all.
+      that's all.
+      reply "At 7% a year it takes" and then their years and then "years. You will have" and then their money and then "." with buttons "Menu".
+    that's all.
+  that's all.
+  otherwise, if their mode is "echo", reply "You said:" and then the message with buttons "Menu".
+  otherwise, if their mode is "magic8", reply "That is not a question. End it with a question mark." with buttons "Menu".
+  otherwise reply "Pick a program first." with buttons "Menu".
+that's all.
+
+when someone sends anything else
+  if their mode is "echo", reply "You said:" and then the message with buttons "Menu".
+  otherwise, if their mode is "magic8"
+    if the message contains "?", reply one of "Yes.", "No.", "Maybe.", "Definitely." and "Ask again later." with buttons "Menu".
+    otherwise reply "That is not a question. End it with a question mark." with buttons "Menu".
+  that's all.
+  otherwise, if their mode is "shop"
+    if the message contains "coffee" or the message contains "кофе", reply "Coffee is 900 tenge. Come by!" with buttons "Prices", "Hours", "Contact" and "Menu".
+    otherwise reply "Press one of the buttons." with buttons "Prices", "Hours", "Contact" and "Menu".
+  that's all.
+  otherwise, if their mode is "doubler" or their mode is "guess" or their mode is "table" or their mode is "collatz" or their mode is "savings", reply "Please send a number." with buttons "Menu".
+  otherwise reply "Pick a program from the menu." with buttons "Menu".
+that's all.

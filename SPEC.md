@@ -131,6 +131,15 @@ the user's score is 100.
 
 Форма `X is …` работает, только если имя стоит в начале предложения. После `if`, `until`, `when` слово `is` означает сравнение.
 
+Значение можно склеить из частей через `and then` или `followed by`, по тем же правилам пробелов, что и при печати (раздел 5.1). Результат всегда текст:
+
+```text
+set greeting to "Hi" and then name and then "!".
+set report to report and then a new line and then score.
+```
+
+`a new line` (также `line break`, `newline`) — текст из одного перевода строки. Так собираются многострочные ответы ботов.
+
 ### 4.3 Изменение чисел
 
 ```text
@@ -229,6 +238,17 @@ otherwise, if score is more than 20, say "not bad".
 ```
 
 `otherwise` относится к ближайшему предыдущему `if` без `otherwise` в той же группе, в том числе к последнему звену цепочки `otherwise, if`.
+
+У звена `otherwise, if <условие>` без запятой после условия тело идёт группой на следующих строках:
+
+```text
+if mode is "a", say "first".
+otherwise, if mode is "b"
+  say "second".
+  add 1 to seen.
+that's all.
+otherwise say "something else".
+```
 
 Условие в конце предложения относится ко всему предложению:
 

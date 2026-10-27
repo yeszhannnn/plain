@@ -362,6 +362,11 @@ class OneOf:
     def __str__(self): return f"OneOf({', '.join(map(str, self.items))})"
 
 @dataclass
+class Concat:   # texts and numbers glued together: "a" and then n
+    parts: list
+    def __str__(self): return f"Concat({', '.join(map(str, self.parts))})"
+
+@dataclass
 class Msg:      # text of the message being handled
     def __str__(self): return "Message"
 
@@ -508,6 +513,8 @@ class Parser:
             return [(Num(-toks[i + 1].value), i + 2)]
         if t.kind == "STR":
             return [(Text(t.value), i + 1)]
+        if t.kind == "NEWLINE":
+            return [(Text("\n"), i + 1)]
         if t.kind == "MSG":
             return [(Msg(), i + 1)]
         if t.kind == "NAME":
@@ -734,12 +741,12 @@ class Parser:
             if to != 2:
                 self.err('Write it like: set age to 18.')
             tgt = self.target(toks[1])
-            e = self.one_expr(toks[3:], "the value")
+            e = self.value(toks[3:])
             self.define(tgt)
             return Assign(tgt.value, e, self.line)
         if k == "WORD" and n > 2 and toks[1].kind == "IS":
             tgt = toks[0]
-            e = self.one_expr(toks[2:], "the value")
+            e = self.value(toks[2:])
             self.define(tgt)
             return Assign(tgt.value, e, self.line)
         if k in ("ADD", "SUB") and n >= 4 and toks[-2].kind == ("TO" if k == "ADD" else "FROM"):
@@ -773,6 +780,17 @@ class Parser:
             if j < len(toks) and toks[j].kind == "CONCAT":
                 res += [([e] + more, k) for more, k in self.print_args(toks, j + 1)]
         return res
+
+    def value(self, toks):
+        """The value of an assignment: one expression, or parts joined with "and then"."""
+        cands = unique([parts for parts, j in self.print_args(toks, 0) if j == len(toks)],
+                       key=lambda ps: ", ".join(map(str, ps)))
+        if not cands:
+            self.err(f'I couldn\'t understand the value: "{show(toks)}".')
+        if len(cands) > 1:
+            raise AmbiguityError(ambiguity_text(
+                [" and then ".join(english_expr(p) for p in c) for c in cands]), self.line)
+        return cands[0][0] if len(cands[0]) == 1 else Concat(cands[0])
 
     def print_stmt(self, toks):
         n = len(toks)
@@ -866,6 +884,8 @@ def english_expr(e, top=True):
         return f"a random number from {english_expr(e.low)} to {english_expr(e.high)}"
     if isinstance(e, OneOf):
         return "one of " + ", ".join(english_expr(x) for x in e.items)
+    if isinstance(e, Concat):
+        return " and then ".join(english_expr(x) for x in e.parts)
     return str(e)
 
 
@@ -942,23 +962,32 @@ def parse_program(src, lx=None):
             if prev is None:
                 raise EngError('"Otherwise" needs an "if" sentence right before it.', item.line)
             prev.else_ = []
-            if node.stmt is not None:
-                prev.else_.append(node.stmt)
-            else:
+            if node.stmt is None:
                 stack.append(["else", prev.else_, item.header_colon, prev])
+            else:
+                prev.else_.append(node.stmt)
+                if is_header(node.stmt):     # "otherwise, if X" with a block below
+                    stack.append(header_frame(node.stmt, item.header_colon))
             continue
         if isinstance(node, Handler) and stack:
             raise EngError('A "when someone sends" rule must start a new group, not sit inside another one. '
                            'Close the group above with "that\'s all".', item.line)
-        is_header = (isinstance(node, Repeat) and not node.body) or \
-                    (isinstance(node, (If, Handler)) and not getattr(node, "then", None) and
-                     not getattr(node, "body", None))
         add(node)
-        if is_header:
-            body = node.then if isinstance(node, If) else node.body
-            kind = {If: "then", Repeat: "repeat", Handler: "handler"}[type(node)]
-            stack.append([kind, body, item.header_colon, node])
+        if is_header(node):
+            stack.append(header_frame(node, item.header_colon))
     return root
+
+
+def is_header(node):
+    """A statement whose body follows on the next lines."""
+    if isinstance(node, If):
+        return not node.then
+    return isinstance(node, (Repeat, Handler)) and not node.body
+
+
+def header_frame(node, single_line):
+    body = node.then if isinstance(node, If) else node.body
+    return [{If: "then", Repeat: "repeat", Handler: "handler"}[type(node)], body, single_line, node]
 
 
 # ───────────────────────────── Types ─────────────────────────────
@@ -1013,6 +1042,10 @@ class Types:
                 raise EngError(f'All choices in "{english_expr(e)}" must be the same kind: all text or all numbers.',
                                line)
             return ts.pop()
+        if isinstance(e, Concat):
+            for x in e.parts:
+                self.expr(x, line)
+            return TEXT
         if isinstance(e, Bin):
             l, r = self.expr(e.left, line), self.expr(e.right, line)
             if l != INT or r != INT:
@@ -1230,6 +1263,8 @@ def run(prog, types, out=sys.stdout):
             return random.randint(lo, hi)
         if isinstance(e, OneOf):
             return ev(random.choice(e.items))
+        if isinstance(e, Concat):
+            return join_parts(fmt_value(ev(x)) for x in e.parts)
         if isinstance(e, Bin):
             a, b = ev(e.left), ev(e.right)
             if e.op == "+":
@@ -1300,6 +1335,10 @@ void pl_init(void);
 void pl_out_text(const char *s);
 void pl_out_int(long long v);
 void pl_out_print(void);
+void pl_cat_begin(void);
+void pl_cat_text(const char *s);
+void pl_cat_int(long long v);
+char *pl_cat_end(void);
 int pl_text_cmp(const char *a, const char *b);
 int pl_text_same(const char *a, const char *b);
 int pl_contains(const char *h, const char *n);
@@ -1362,6 +1401,17 @@ def emit_c(prog, types):
         if isinstance(e, OneOf):
             t = ctype[ty(e)]
             return f"(({t}[]){{{', '.join(ce(x) for x in e.items)}}})[pl_random(0, {len(e.items) - 1})]"
+        if isinstance(e, Concat):
+            calls = ["pl_cat_begin()"]
+            for x in e.parts:
+                t = ty(x)
+                if t == INT:
+                    calls.append(f"pl_cat_int({ce(x)})")
+                elif t == BOOL:
+                    calls.append(f'pl_cat_text({ce(x)} ? "true" : "false")')
+                else:
+                    calls.append(f"pl_cat_text({ce(x)})")
+            return "(" + ", ".join(calls + ["pl_cat_end()"]) + ")"
         if isinstance(e, Bin):
             return f"({ce(e.left)} {e.op} {ce(e.right)})"
         if isinstance(e, Cmp):
@@ -1395,7 +1445,7 @@ def emit_c(prog, types):
         for s in body:
             if isinstance(s, Assign):
                 v = ce(s.expr)
-                if types.vars[s.name] == TEXT and not isinstance(s.expr, Text):
+                if types.vars[s.name] == TEXT and not isinstance(s.expr, (Text, Concat)):
                     v = f"pl_keep({v})"
                 lines.append(f"{ind}{var(s.name)} = {v};")
             elif isinstance(s, Update):
@@ -1447,6 +1497,10 @@ declare void @pl_init()
 declare void @pl_out_text(ptr)
 declare void @pl_out_int(i64)
 declare void @pl_out_print()
+declare void @pl_cat_begin()
+declare void @pl_cat_text(ptr)
+declare void @pl_cat_int(i64)
+declare ptr @pl_cat_end()
 declare i32 @pl_text_cmp(ptr, ptr)
 declare i32 @pl_text_same(ptr, ptr)
 declare i32 @pl_contains(ptr, ptr)
@@ -1547,6 +1601,21 @@ class LLVMGen:
                 self.emit(f"{r} = select i1 {c}, {lt} {vals[k]}, {lt} {acc}")
                 acc = r
             return acc
+        if isinstance(e, Concat):
+            vals = [(self.ty(x), self.expr(x)) for x in e.parts]
+            self.emit("call void @pl_cat_begin()")
+            for t, v in vals:
+                if t == INT:
+                    self.emit(f"call void @pl_cat_int(i64 {v})")
+                    continue
+                if t == BOOL:
+                    r = self.t()
+                    self.emit(f"{r} = select i1 {v}, ptr {self.string('true')}, ptr {self.string('false')}")
+                    v = r
+                self.emit(f"call void @pl_cat_text(ptr {v})")
+            r = self.t()
+            self.emit(f"{r} = call ptr @pl_cat_end()")
+            return r
         if isinstance(e, Bin):
             a, b = self.expr(e.left), self.expr(e.right)
             r = self.t()
@@ -1599,7 +1668,7 @@ class LLVMGen:
             if isinstance(s, Assign):
                 t = self.types.vars[s.name]
                 v = self.expr(s.expr)
-                if t == TEXT and not isinstance(s.expr, Text):
+                if t == TEXT and not isinstance(s.expr, (Text, Concat)):
                     k = self.t()
                     self.emit(f"{k} = call ptr @pl_keep(ptr {v})")
                     v = k

@@ -38,23 +38,33 @@ static char *buf_take(Buf *b) {
 
 /* ── output: parts are joined with one space, except before punctuation ── */
 
-static Buf out;
+static Buf out, cat;   /* cat: text being glued for an assignment */
 
-static void out_piece(const char *s) {
+static void piece(Buf *b, const char *s) {
     if (!s || !*s) return;
-    if (out.n && !isspace((unsigned char)out.p[out.n - 1]) && !isspace((unsigned char)s[0]) &&
+    if (b->n && !isspace((unsigned char)b->p[b->n - 1]) && !isspace((unsigned char)s[0]) &&
         !strchr(".,!?;:)", s[0]))
-        buf_putc(&out, ' ');
-    buf_puts(&out, s);
+        buf_putc(b, ' ');
+    buf_puts(b, s);
 }
 
-void pl_out_text(const char *s) { out_piece(s); }
-
-void pl_out_int(long long v) {
+static void piece_int(Buf *b, long long v) {
     char tmp[32];
     snprintf(tmp, sizeof tmp, "%lld", v);
-    out_piece(tmp);
+    piece(b, tmp);
 }
+
+void pl_out_text(const char *s) { piece(&out, s); }
+void pl_out_int(long long v) { piece_int(&out, v); }
+
+void pl_cat_begin(void) {
+    cat.n = 0;
+    if (cat.p) cat.p[0] = 0;
+}
+
+void pl_cat_text(const char *s) { piece(&cat, s); }
+void pl_cat_int(long long v) { piece_int(&cat, v); }
+char *pl_cat_end(void) { return strdup(cat.p ? cat.p : ""); }
 
 void pl_out_print(void) {
     fwrite(out.p ? out.p : "", 1, out.n, stdout);

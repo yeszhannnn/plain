@@ -105,6 +105,7 @@ TELEGRAM_BOT_TOKEN=ваш_токен ./mybot
 | `examples/bots/guess.eng` | игра «угадай число» |
 | `examples/bots/magic8.eng` | магический шар, случайные ответы |
 | `examples/bots/shop.eng` | меню кофейни на кнопках |
+| `examples/bots/showcase.eng` | витрина: все программы выше в одном боте с меню, работает в [@plainlangbot](https://t.me/plainlangbot) |
 
 ## Команды компилятора
 

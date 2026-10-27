@@ -192,6 +192,20 @@ class Bots(unittest.TestCase):
             self.assertEqual(replies[2][0], "Coffee is 900 tenge. Come by!", b)
             self.assertEqual(replies[3][0], "Coffee is 900 tenge. Come by!", b)
 
+    def test_showcase(self):
+        for b in self.BACKENDS:
+            replies = bot_replies("showcase.eng", say("/start", "Doubler", "21", "Times table", "3", "Hello"), b)
+            self.assertEqual(len(replies[0][1]), 12, b)
+            self.assertEqual(replies[2][0], "Twice that is 42.", b)
+            self.assertEqual(replies[4][0].splitlines()[-1], "3 × 10 = 30", b)
+            self.assertEqual(replies[5][0], "\n".join(["Hello"] * 5), b)
+
+    def test_glued_text_and_otherwise_if_block(self):
+        text = ('set t to "n:". set i to 1. do the following 3 times. '
+                'set t to t and then a new line and then i. increase i. that\'s all. say t.\n'
+                'if i is 1, say one.\notherwise, if i is 4\nsay four.\nsay "really".\nthat\'s all.\n')
+        self.assertEqual(run_text(text), "n:\n1\n2\n3\n4\nreally\n")  # "four" is a number word
+
     def test_bot_words_outside_a_rule(self):
         with self.assertRaises(engc.EngError):
             engc.compile_front('reply "hi".')
