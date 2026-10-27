@@ -1,0 +1,14 @@
+set n to 27.
+set steps to 0.
+set big to 0.
+do the following 200 times.
+  if n is more than 1
+    set rem to n - n / 2 * 2.
+    if rem is 0, halve n.
+    otherwise set n to 3 * n + 1.
+    add 1 to steps.
+    if n is more than big, set big to n.
+  that's all.
+that's all.
+say "steps:" and then steps.
+say "highest:" and then big.

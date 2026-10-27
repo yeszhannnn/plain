@@ -1,0 +1,10 @@
+set n to 1.
+do the following 15 times.
+  set r3 to n - n / 3 * 3.
+  set r5 to n - n / 5 * 5.
+  if r3 is 0 and r5 is 0, say "FizzBuzz".
+  otherwise, if r3 is 0, say "Fizz".
+  otherwise, if r5 is 0, say "Buzz".
+  otherwise say n.
+  increase n by 1.
+that's all.

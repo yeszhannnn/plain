@@ -1,0 +1,5 @@
+set i to 1.
+do the following 10 times.
+  say "7 times" and then i and then "is" and then 7 * i.
+  increase i by 1.
+that's all.

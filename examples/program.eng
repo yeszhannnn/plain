@@ -1,0 +1,22 @@
+set age to 18.
+the user's score is 100.
+add 5 to the user's score.
+say "age is" and then age.
+say "score is" and then the user's score.
+
+if the user's score is more than 50, say "well done".
+otherwise say "try again".
+
+do the following three times.
+  say "still here".
+  add one to the counter.
+that's all.
+say "the counter is" and then the counter.
+
+set the number to 3.
+keep doubling the number until it is bigger than 100.
+say the number.
+
+the user is happy.
+say "yay" twice, but only if the user is happy.
+say "boo", but only if the user is sad.
