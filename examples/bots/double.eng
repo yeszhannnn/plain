@@ -1,0 +1,3 @@
+when someone sends "/start", reply "Hi" and then their name and then "! Send me a number.".
+when someone sends a number, reply "Twice that is" and then the number they sent times 2.
+when someone sends anything else, reply "I only understand numbers for now.".
