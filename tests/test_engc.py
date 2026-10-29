@@ -285,7 +285,7 @@ class Bots(unittest.TestCase):
     def test_showcase(self):
         for b in self.BACKENDS:
             replies = bot_replies("showcase.eng", say("/start", "Doubler", "21", "Times table", "3", "Hello"), b)
-            self.assertEqual(len(replies[0][1]), 12, b)
+            self.assertEqual(len(replies[0][1]), 13, b)
             self.assertEqual(replies[2][0], "Twice that is 42.", b)
             self.assertEqual(replies[4][0].splitlines()[-1], "3 × 10 = 30", b)
             self.assertEqual(replies[5][0], "\n".join(["Hello"] * 5), b)

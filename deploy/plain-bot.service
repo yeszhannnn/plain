@@ -1,0 +1,23 @@
+# systemd service for a Telegram bot written in Plain.
+# Install: see the "Running a bot on a server" section of README.md.
+[Unit]
+Description=Telegram bot written in Plain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=plain
+WorkingDirectory=/opt/plain-bot
+EnvironmentFile=/opt/plain-bot/bot.env
+ExecStart=/opt/plain-bot/bot
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/plain-bot
+
+[Install]
+WantedBy=multi-user.target

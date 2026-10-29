@@ -219,8 +219,9 @@ class Interpreter:
         if isinstance(e, Logic):
             if e.op == "not":
                 return not self.ev(e.args[0])
-            vals = [self.ev(a) for a in e.args]
-            return all(vals) if e.op == "and" else any(vals)
+            if e.op == "and":
+                return all(self.ev(a) for a in e.args)      # stops at the first "no"
+            return any(self.ev(a) for a in e.args)          # stops at the first "yes"
         if isinstance(e, Index):
             c = self.ev(e.container)
             return self.get_index(c, self.ev(e.index) if e.index is not None else None, e.kind)

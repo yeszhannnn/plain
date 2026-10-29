@@ -363,8 +363,9 @@ class Parser:
         res = [(Call(sig, args), j) for sig in self.funcs.prefix(t) for args, j in self.match(sig.pattern, toks, i)]
         if t.value.startswith(USER):
             self.user_vars.setdefault(t.value, t.text)   # every user starts with zero / empty
-        if self.scope_of(t.value) is not None:
-            return res + [(self.make_var(t.value), i + 1)]
+        known = self.scope_of(t.value) is not None
+        if known:
+            res.append((self.make_var(t.value), i + 1))
         nxt = toks[i + 1] if i + 1 < len(toks) else None
         if t.value in INDEX_WORDS:
             for n, j in self.exprs(toks, i + 1):
@@ -382,6 +383,8 @@ class Parser:
             res += [(Index(c, idx), m) for c, m in self.tight(toks, i + 3)]
         elif t.value == "file" and nxt is not None:
             res += [(Builtin("file_text", [p]), j) for p, j in self.tight(toks, i + 1)]
+        if known:
+            return res
         if "." in t.value and not res:
             self.err(f'I don\'t know "{t.text}" yet. Set it first, for example: set {t.text} to 0.')
         return res + [(Text(t.text), i + 1)]   # an unknown single word is just text

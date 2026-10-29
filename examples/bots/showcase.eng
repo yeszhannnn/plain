@@ -1,8 +1,35 @@
+Note: one bot with every example program. Memory is saved, so a restart forgets nothing.
+remember everything in "showcase-memory.json".
 set total to 0.
 
 when someone sends "/start", "menu" or "/menu"
   set their mode to "menu".
-  reply "Hi" and then their name and then "! Every program in this bot is written in Plain, a programming language where code is plain English. Pick one:" with buttons "Doubler", "Echo", "Counter", "Guess the number", "Magic 8 ball", "Coffee shop", "Times table", "Collatz", "Savings", "FizzBuzz", "Countdown" and "Hello".
+  reply "Hi" and then their name and then "! Every program in this bot is written in Plain, a programming language where code is plain English. Pick one:" with buttons "Doubler", "Echo", "Counter", "Guess the number", "Magic 8 ball", "Coffee shop", "Times table", "Collatz", "Savings", "FizzBuzz", "Countdown", "Hello" and "To-do list".
+that's all.
+
+to list the tasks
+  if the number of items in their tasks is 0, reply "Your list is empty. Send me a task to add it." with buttons "Menu".
+  otherwise
+    set their text to "Your tasks:".
+    set their n to 0.
+    for every task in their tasks
+      add 1 to their n.
+      set their text to their text and then a new line and then their n and then "." and then task.
+    that's all.
+    reply their text with buttons "Show list", "Clear list" and "Menu".
+  that's all.
+that's all.
+
+when someone sends "To-do list"
+  set their mode to "todo".
+  list the tasks.
+that's all.
+
+when someone sends "Show list", list the tasks.
+
+when someone sends "Clear list"
+  set their tasks to an empty list.
+  reply "Your list is empty now." with buttons "Menu".
 that's all.
 
 when someone sends "Doubler"
@@ -151,6 +178,10 @@ when someone sends a number
   that's all.
   otherwise, if their mode is "echo", reply "You said:" and then the message with buttons "Menu".
   otherwise, if their mode is "magic8", reply "That is not a question. End it with a question mark." with buttons "Menu".
+  otherwise, if their mode is "todo"
+    add the message to their tasks.
+    reply "Added:" and then the message and then "." with buttons "Show list", "Clear list" and "Menu".
+  that's all.
   otherwise reply "Pick a program first." with buttons "Menu".
 that's all.
 
@@ -165,5 +196,9 @@ when someone sends anything else
     otherwise reply "Press one of the buttons." with buttons "Prices", "Hours", "Contact" and "Menu".
   that's all.
   otherwise, if their mode is "doubler" or their mode is "guess" or their mode is "table" or their mode is "collatz" or their mode is "savings", reply "Please send a number." with buttons "Menu".
+  otherwise, if their mode is "todo"
+    add the message to their tasks.
+    reply "Added:" and then the message and then "." with buttons "Show list", "Clear list" and "Menu".
+  that's all.
   otherwise reply "Pick a program from the menu." with buttons "Menu".
 that's all.
