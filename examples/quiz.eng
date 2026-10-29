@@ -1,0 +1,9 @@
+Note: questions and answers in the terminal.
+
+ask "What is your name?" and remember the answer as name.
+ask "How old are you?" and remember the answer as age.
+say "Hi" and then name and then "! Next year you will be" and then age plus 1 and then ".".
+
+ask "What is 7 times 8?" and remember the answer as guess.
+if guess is 56, say "Correct!".
+otherwise say "Not quite, it is 56.".

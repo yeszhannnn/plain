@@ -1,0 +1,20 @@
+Note: prime numbers with the sieve of Eratosthenes.
+
+set limit to 100.
+set crossed to an empty list.
+for every n from 1 to limit, add 0 to crossed.
+
+set primes to an empty list.
+for every n from 2 to limit
+  if item n of crossed is 0
+    add n to primes.
+    set multiple to n times n.
+    as long as multiple is at most limit
+      set item multiple of crossed to 1.
+      add n to multiple.
+    that's all.
+  that's all.
+that's all.
+
+say "There are" and then the number of items in primes and then "primes up to" and then limit and then ":".
+say primes joined with ", ".

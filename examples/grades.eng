@@ -1,0 +1,25 @@
+Note: grades with a table of lists and a function of your own.
+
+to find the letter for a score
+  if the score is at least 90, give back "A".
+  if the score is at least 80, give back "B".
+  if the score is at least 70, give back "C".
+  give back "F".
+that's all.
+
+the scores of "Ana" are 95, 88 and 92.
+the scores of "Bob" are 72, 65 and 80.
+the scores of "Dana" are 85, 91 and 78.
+
+for every student in the scores
+  set average to (the average of the scores of student) rounded.
+  say student and then ":" and then average and then "points, grade" and then the letter for average.
+that's all.
+
+set everyone to an empty list.
+for every student in the scores
+  for every score in the scores of student, add score to everyone.
+that's all.
+sort everyone.
+say "All scores from low to high:" and then everyone joined with ", ".
+say "Best score:" and then the largest of everyone.

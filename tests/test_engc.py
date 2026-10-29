@@ -1,3 +1,4 @@
+import glob
 import io
 import os
 import subprocess
@@ -11,8 +12,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import engc  # noqa: E402
 from mock_telegram import MockTelegram, say  # noqa: E402
+from plainc.core import dump_program  # noqa: E402
+from plainc.errors import AmbiguityError, EngError  # noqa: E402
 
 EX = os.path.join(ROOT, "examples")
+BOTS = os.path.join(EX, "bots")
+BUILD = tempfile.mkdtemp(prefix="plain-tests-")
 
 
 def src(name):
@@ -20,15 +25,34 @@ def src(name):
         return f.read()
 
 
-def run_text(text):
-    prog, types = engc.compile_front(text)
-    buf = io.StringIO()
-    engc.run(prog, types, buf)
-    return buf.getvalue()
+def run_text(text, argv=(), inp=""):
+    out = io.StringIO()
+    engc.run(engc.compile_source(text), argv, out, io.StringIO(inp))
+    return out.getvalue()
 
 
 def core(text):
-    return engc.dump_program(engc.parse_program(text))
+    return dump_program(engc.compile_source(text).prog)
+
+
+def native(text, argv=(), inp="", cwd=None, file="prog.eng"):
+    """Build text into an executable and run it: (stdout, stderr, exit code)."""
+    path = os.path.join(BUILD, file)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    exe = path[:-4]
+    engc.build(engc.compile_file(path), exe)
+    p = subprocess.run([exe, *argv], input=inp, capture_output=True, text=True, cwd=cwd or BUILD)
+    return p.stdout, p.stderr, p.returncode
+
+
+def interpreted(text, argv=(), inp="", cwd=None, file="prog.eng"):
+    path = os.path.join(BUILD, file)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    p = subprocess.run([sys.executable, os.path.join(ROOT, "engc.py"), "run", path, *argv], input=inp,
+                       capture_output=True, text=True, cwd=cwd or BUILD)
+    return p.stdout, p.stderr, p.returncode
 
 
 class SameMeaning(unittest.TestCase):
@@ -51,93 +75,159 @@ class SameMeaning(unittest.TestCase):
         self.assertEqual(run_text("say hi twice."), "hi\nhi\n")
 
 
-class Programs(unittest.TestCase):
-    def test_program_output(self):
-        self.assertEqual(run_text(src("program.eng")),
-                         "age is 18\nscore is 105\nwell done\n"
-                         "still here\nstill here\nstill here\n"
-                         "the counter is 3\n192\nyay\nyay\n")
-
-    def test_symbols_follow_school_maths(self):
+class Language(unittest.TestCase):
+    def test_arithmetic(self):
         self.assertEqual(run_text("say 1 + 2 * 3."), "7\n")
         self.assertEqual(run_text("say (1 plus 2) times 3."), "9\n")
         self.assertEqual(run_text("say 10 minus 3 minus 2."), "5\n")
+        self.assertEqual(run_text("say 7 / 2. say 7.0 / 2. say -7 mod 2. say 2 to the power of 10."),
+                         "3\n3.5\n-1\n1024\n")
+        self.assertEqual(run_text("say the remainder of 17 divided by 5. say 17 mod 5."), "2\n2\n")
 
-    def test_if_block_with_otherwise(self):
-        text = "set x to 2.\nif x is 1\nsay one.\notherwise\nsay other.\nthat's all.\n"
-        self.assertEqual(run_text(text), "other\n")
+    def test_decimals(self):
+        self.assertEqual(run_text("set total to 0. add 0.5 to total. say total. say 2.5 rounded. say 10 / 4.0."),
+                         "0.5\n3\n2.5\n")
+        self.assertEqual(run_text("say the square root of 16. say 3.7 rounded down. say 3.2 rounded up."),
+                         "4.0\n3\n4\n")
 
-    def test_else_if_chain(self):
-        self.assertEqual(run_text(src("fizzbuzz.eng")).split()[:6], ["1", "2", "Fizz", "4", "Buzz", "Fizz"])
+    def test_text(self):
+        self.assertEqual(run_text('say "Hello" in uppercase. say "ҚАЗАҚ Кофе" in lowercase.'), "HELLO\nқазақ кофе\n")
+        self.assertEqual(run_text('say the words of "a b  c" joined with "-".'), "a-b-c\n")
+        self.assertEqual(run_text('say "banana" with "a" replaced by "o". say "  x  " trimmed and then "|".'),
+                         "bonono\nx |\n")
+        self.assertEqual(run_text('say the number of letters in "қала". say letter 2 of "қала".'), "4\nа\n")
+        self.assertEqual(run_text('say "42" as a number plus 1. if "1.5" is a number, say "yes".'), "43\nyes\n")
 
-    def test_otherwise_inside_if_block(self):
-        self.assertEqual(run_text(src("collatz.eng")), "steps: 111\nhighest: 9232\n")
+    def test_lists(self):
+        text = ('the guests are "Ana", "Bob" and "Dana". add "Eve" to the guests. remove "Bob" from the guests. '
+                'say the guests. sort the guests. reverse the guests. say item 1 of the guests. '
+                'say the number of items in the guests. if the guests contain "Ana", say "Ana is here".')
+        self.assertEqual(run_text(text), "Ana, Dana and Eve\nEve\n3\nAna is here\n")
+        self.assertEqual(run_text("set s to 3, 5 and 8. say the sum of s. say the largest of s. say items 2 to 3 of s."),
+                         "16\n8\n5 and 8\n")
 
-    def test_it(self):
-        self.assertEqual(run_text("set x to 4. double it. say it."), "8\n")
+    def test_tables(self):
+        text = ('the price of "coffee" is 900. the price of "tea" is 600. '
+                'if the price of "juice" is unknown, say "no juice". say the price. '
+                'add 1 to the count of "x". add 1 to the count of "x". say the count of "x".')
+        self.assertEqual(run_text(text), "no juice\ncoffee: 900, tea: 600\n2\n")
+
+    def test_loops(self):
+        self.assertEqual(run_text("for every n from 3 to 1, say n."), "3\n2\n1\n")
+        text = ("set n to 0.\nas long as n is less than 100\nincrease n by 7.\n"
+                "if n is more than 30, stop the loop.\nthat's all.\nsay n.\n"
+                "for every k from 1 to 5\nif the remainder of k divided by 2 is 0, skip to the next one.\nsay k.\n"
+                "that's all.\n")
+        self.assertEqual(run_text(text), "35\n1\n3\n5\n")
+
+    def test_functions(self):
+        text = ("to greet someone, say \"Hi\" and then someone.\ngreet \"Ana\".\n"
+                "to find the factorial of a number\n  if the number is at most 1, give back 1.\n"
+                "  give back the number times the factorial of (the number minus 1).\nthat's all.\n"
+                "say the factorial of 10.\n"
+                "to find a number doubled, give back the number times 2.\nsay 21 doubled.\n")
+        self.assertEqual(run_text(text), "Hi Ana\n3628800\n42\n")
+
+    def test_if_block_with_otherwise_if(self):
+        text = "set x to 2.\nif x is 1, say one.\notherwise, if x is 2\nsay \"second\".\nsay \"really\".\nthat's all.\n"
+        self.assertEqual(run_text(text), "second\nreally\n")
+
+    def test_it_and_comments(self):
+        self.assertEqual(run_text("Note: a comment.\n# another\nset x to 4. double it. say it."), "8\n")
+
+    def test_arguments_and_input(self):
+        self.assertEqual(run_text("say the arguments.", ["a", "b"]), "a and b\n")
+        out = run_text('ask "Age?" and remember the answer as age. say age plus 1.', inp="x\n41\n")
+        self.assertEqual(out, "Age? Please type a whole number.\nAge? 42\n")
 
 
 class Errors(unittest.TestCase):
     def test_plus_times_is_ambiguous(self):
-        with self.assertRaises(engc.AmbiguityError) as cm:
-            engc.compile_front(src("ambiguous.eng"))
+        with self.assertRaises(AmbiguityError) as cm:
+            engc.compile_source(src("ambiguous.eng"))
         self.assertIn("1 plus (2 times 3)", cm.exception.message)
         self.assertIn("(1 plus 2) times 3", cm.exception.message)
 
-    def test_times_as_operator_and_as_repetition(self):
-        # "2 times 3" is multiplication, the trailing "4 times" is repetition
-        self.assertEqual(run_text("say 2 times 3 4 times."), "6\n" * 4)
-        with self.assertRaises(engc.EngError):
-            engc.compile_front("say 2 times 3 times 4 times.")
-
     def test_typo_suggestion(self):
-        with self.assertRaises(engc.EngError) as cm:
-            engc.compile_front(src("typo.eng"))
+        with self.assertRaises(EngError) as cm:
+            engc.compile_source(src("typo.eng"))
         self.assertIn('Did you mean "print"', cm.exception.message)
 
     def test_type_conflict(self):
-        with self.assertRaises(engc.EngError) as cm:
-            engc.compile_front(src("type_error.eng"))
+        with self.assertRaises(EngError) as cm:
+            engc.compile_source(src("type_error.eng"))
         self.assertEqual(cm.exception.line, 2)
+        self.assertIn("whole number", cm.exception.message)
+
+    def test_mixed_list(self):
+        with self.assertRaises(EngError):
+            engc.compile_source('set x to 1, "two" and 3.')
+
+    def test_break_outside_loop(self):
+        with self.assertRaises(EngError):
+            engc.compile_source("stop the loop.")
+
+    def test_runtime_errors_match(self):
+        cases = ["set l to 1, 2 and 3.\nsay item 5 of l.\n",
+                 "set x to 0.\nsay 5 / x.\n",
+                 'say "abc" as a number.\n',
+                 'the price of "tea" is 5.\nsay the price of "milk".\n',
+                 'read the file "nowhere.txt" into t.\n']
+        for text in cases:
+            a, b = interpreted(text), native(text)
+            self.assertEqual(a, b, text)
+            self.assertEqual(a[2], 1, text)
+            self.assertTrue(a[1].startswith("prog.eng, line "), a[1])
 
 
-class Native(unittest.TestCase):
-    def check_backend(self, name, kind):
-        prog, types = engc.compile_front(src(name))
-        with tempfile.TemporaryDirectory() as d:
-            exe = os.path.join(d, "a.out")
-            if kind == "llvm":
-                engc.build(prog, types, exe)
-            else:
-                c = os.path.join(d, "a.c")
-                with open(c, "w") as f:
-                    f.write(engc.emit_c(prog, types))
-                subprocess.run(["clang", "-O2", "-Wno-parentheses-equality", c, engc.RUNTIME, "-o", exe] + engc.link_flags(prog), check=True)
-            out = subprocess.run([exe], capture_output=True, text=True, check=True).stdout
-        self.assertEqual(out, run_text(src(name)), f"{name} via {kind}")
+class Examples(unittest.TestCase):
+    """Every example: interpreter, native binary and the recorded output agree."""
 
-    def test_native_matches_interpreter(self):
-        for name in ("hello_print.eng", "program.eng", "fizzbuzz.eng", "collatz.eng"):
-            for kind in ("llvm", "c"):
-                self.check_backend(name, kind)
+    def test_examples(self):
+        paths = sorted(glob.glob(os.path.join(EX, "*.expected")) + glob.glob(os.path.join(EX, "*", "*.expected")))
+        self.assertGreater(len(paths), 10)
+        for expected_path in paths:
+            program = expected_path[:-len(".expected")] + ".eng"
+            folder = os.path.dirname(program)
+            inp_path = expected_path[:-len(".expected")] + ".input"
+            inp = open(inp_path).read() if os.path.exists(inp_path) else ""
+            expected = open(expected_path, encoding="utf-8").read()
+            with self.subTest(program=os.path.relpath(program, EX)):
+                p = subprocess.run([sys.executable, os.path.join(ROOT, "engc.py"), "run", program], input=inp,
+                                   capture_output=True, text=True, cwd=folder)
+                self.assertEqual(p.stdout, expected)
+                exe = os.path.join(BUILD, os.path.basename(program)[:-4])
+                engc.build(engc.compile_file(program), exe)
+                p = subprocess.run([exe], input=inp, capture_output=True, text=True, cwd=folder)
+                self.assertEqual(p.stdout, expected)
+
+    def test_todo_cli(self):
+        work = tempfile.mkdtemp(prefix="plain-todo-")
+        exe = os.path.join(BUILD, "todo")
+        engc.build(engc.compile_file(os.path.join(EX, "todo.eng")), exe)
+        steps = [(["add", "milk"], "Added: milk\n"), (["add", "bread"], "Added: bread\n"),
+                 ([], "1. milk\n2. bread\n"), (["done", "1"], "Done: milk\n"), ([], "1. bread\n")]
+        for args, expected in steps:
+            out = subprocess.run([exe, *args], capture_output=True, text=True, cwd=work).stdout
+            self.assertEqual(out, expected, args)
 
 
-BOTS = os.path.join(EX, "bots")
-
-
-def bot_replies(name, script, backend):
+def bot_replies(name, script, backend, cwd=None):
     """Talk to a bot through the fake Telegram server, interpreted or compiled."""
     path = os.path.join(BOTS, name)
     mock = MockTelegram(script)
-    with tempfile.TemporaryDirectory() as d:
-        if backend == "native":
-            exe = os.path.join(d, "bot")
-            prog, types = engc.compile_front(open(path, encoding="utf-8").read())
-            engc.build(prog, types, exe)
-            cmd = [exe]
-        else:
-            cmd = [sys.executable, os.path.join(ROOT, "engc.py"), "run", path]
+    if backend == "native":
+        exe = os.path.join(BUILD, name[:-4] + "-bot")
+        engc.build(engc.compile_file(path), exe)
+        cmd = [exe]
+    else:
+        cmd = [sys.executable, os.path.join(ROOT, "engc.py"), "run", path]
+    old = os.getcwd()
+    os.chdir(cwd or BUILD)
+    try:
         return mock.run(cmd)
+    finally:
+        os.chdir(old)
 
 
 class Bots(unittest.TestCase):
@@ -179,14 +269,14 @@ class Bots(unittest.TestCase):
             binary_search.state = {"lo": 1, "hi": 100, "guess": 0}
             replies = bot_replies("guess.eng", binary_search, b)
             self.assertTrue(replies[-1][0].startswith("Yes! You needed"), (b, replies))
-            self.assertLessEqual(len(replies) - 1, 7, b)   # binary search needs at most 7 guesses
+            self.assertLessEqual(len(replies) - 1, 7, b)
 
     def test_magic8_and_shop(self):
         for b in self.BACKENDS:
             replies = bot_replies("magic8.eng", say("will it rain?", "hello"), b)
             self.assertIn(replies[0][0], ["Yes.", "No.", "Maybe.", "Definitely.", "Ask again later."], b)
             self.assertTrue(replies[1][0].startswith("That is not a question"), b)
-            replies = bot_replies("shop.eng", say("MENU", "Prices", "how much is a coffee", "кофе есть?"), b)
+            replies = bot_replies("shop.eng", say("MENU", "Prices", "how much is a coffee", "Кофе есть?"), b)
             self.assertEqual(replies[0], ("What do you want to know?", ["Prices", "Hours", "Contact"]), b)
             self.assertEqual(replies[1][0], "Coffee 900 tenge, tea 600 tenge.", b)
             self.assertEqual(replies[2][0], "Coffee is 900 tenge. Come by!", b)
@@ -200,22 +290,20 @@ class Bots(unittest.TestCase):
             self.assertEqual(replies[4][0].splitlines()[-1], "3 × 10 = 30", b)
             self.assertEqual(replies[5][0], "\n".join(["Hello"] * 5), b)
 
-    def test_glued_text_and_otherwise_if_block(self):
-        text = ('set t to "n:". set i to 1. do the following 3 times. '
-                'set t to t and then a new line and then i. increase i. that\'s all. say t.\n'
-                'if i is 1, say one.\notherwise, if i is 4\nsay four.\nsay "really".\nthat\'s all.\n')
-        self.assertEqual(run_text(text), "n:\n1\n2\n3\n4\nreally\n")  # "four" is a number word
+    def test_todo_bot_remembers_after_restart(self):
+        for b in self.BACKENDS:
+            work = tempfile.mkdtemp(prefix=f"plain-memory-{b}-")
+            first = bot_replies("todo_bot.eng", say("buy milk", "call mom"), b, cwd=work)
+            self.assertEqual(first[-1][0], "Added. You have 2 tasks. All users added 2 so far.", b)
+            second = bot_replies("todo_bot.eng", say("/list", "/done 1", "/list"), b, cwd=work)
+            self.assertEqual([r[0] for r in second],
+                             ["Your tasks:\n1. buy milk\n2. call mom", "Done: buy milk", "Your tasks:\n1. call mom"], b)
 
     def test_bot_words_outside_a_rule(self):
-        with self.assertRaises(engc.EngError):
-            engc.compile_front('reply "hi".')
-        with self.assertRaises(engc.EngError):
-            engc.compile_front("set their score to 1.")
-
-    def test_remainder_and_random(self):
-        self.assertEqual(run_text("say the remainder of 17 divided by 5. say 17 mod 5."), "2\n2\n")
-        n = int(run_text("say a random number from 3 to 4."))
-        self.assertIn(n, (3, 4))
+        with self.assertRaises(EngError):
+            engc.compile_source('reply "hi".')
+        with self.assertRaises(EngError):
+            engc.compile_source("set their score to 1.")
 
 
 if __name__ == "__main__":

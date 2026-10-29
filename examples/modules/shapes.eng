@@ -1,0 +1,5 @@
+Note: commands and functions for main.eng.
+
+to find the area of a width by a height, give back the width times the height.
+to find the circle area for a radius, give back 3.14159 times the radius squared.
+to greet someone, say "Hello," and then someone and then "!".

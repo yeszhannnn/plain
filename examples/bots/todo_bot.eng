@@ -1,0 +1,38 @@
+Note: a to-do list bot. Every user has their own list, and the bot remembers it after a restart.
+
+remember everything in "todo-memory.json".
+set added to 0.
+
+when someone sends "/start", reply "Send me any task to add it. Commands: /list, /done N, /clear.".
+
+when someone sends "/list"
+  if the number of items in their tasks is 0, reply "Nothing to do.".
+  otherwise
+    set their text to "Your tasks:".
+    set their n to 0.
+    for every task in their tasks
+      add 1 to their n.
+      set their text to their text and then a new line and then their n and then "." and then task.
+    that's all.
+    reply their text.
+  that's all.
+that's all.
+
+when someone sends a message that starts with "/done"
+  set their number to (the message with "/done" replaced by "") as a number.
+  if their number is at least 1 and their number is at most the number of items in their tasks
+    reply "Done:" and then item their number of their tasks.
+    remove item their number from their tasks.
+  otherwise reply "There is no task with that number.".
+that's all.
+
+when someone sends "/clear"
+  set their tasks to an empty list.
+  reply "Your list is empty now.".
+that's all.
+
+when someone sends anything else
+  add the message to their tasks.
+  add 1 to added.
+  reply "Added. You have" and then the number of items in their tasks and then "tasks. All users added" and then added and then "so far.".
+that's all.

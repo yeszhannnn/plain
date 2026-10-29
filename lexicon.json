@@ -88,7 +88,9 @@
       "repeats",
       "do following",
       "repeat following",
-      "do this"
+      "do this",
+      "keep doing following",
+      "keep repeating following"
     ],
     "SET": [
       "set",
@@ -309,10 +311,12 @@
     ],
     "CONTAINS": [
       "contains",
+      "contain",
       "containing",
       "that contains",
       "which contains",
       "includes",
+      "include",
       "including"
     ],
     "STARTS": [
@@ -337,6 +341,219 @@
       "new line",
       "line break",
       "newline"
+    ],
+    "FOREACH": [
+      "for every",
+      "for each",
+      "for all"
+    ],
+    "BREAK": [
+      "stop loop",
+      "stop repeating",
+      "leave loop",
+      "break out of loop",
+      "exit loop"
+    ],
+    "CONTINUE": [
+      "skip to next one",
+      "skip to next",
+      "go to next one",
+      "skip this one",
+      "move on to next one"
+    ],
+    "EXIT": [
+      "stop program",
+      "quit program",
+      "exit program",
+      "end program",
+      "quit"
+    ],
+    "RETURN": [
+      "give back",
+      "return"
+    ],
+    "USE": [
+      "use"
+    ],
+    "REMOVE": [
+      "remove",
+      "delete",
+      "take out"
+    ],
+    "SORT": [
+      "sort"
+    ],
+    "REVERSE": [
+      "reverse"
+    ],
+    "LENGTH": [
+      "length of",
+      "size of",
+      "number of items in",
+      "number of letters in",
+      "number of characters in",
+      "number of things in"
+    ],
+    "SUM": [
+      "sum of"
+    ],
+    "AVERAGE": [
+      "average of",
+      "mean of"
+    ],
+    "LARGEST": [
+      "largest of",
+      "biggest of",
+      "highest of",
+      "maximum of",
+      "largest in",
+      "biggest in"
+    ],
+    "SMALLEST": [
+      "smallest of",
+      "lowest of",
+      "minimum of",
+      "smallest in"
+    ],
+    "SQRT": [
+      "square root of"
+    ],
+    "ABS": [
+      "absolute value of"
+    ],
+    "POW": [
+      "to power of",
+      "raised to"
+    ],
+    "SQUARED": [
+      "squared"
+    ],
+    "ROUNDED": [
+      "rounded",
+      "rounded off"
+    ],
+    "ROUNDUP": [
+      "rounded up"
+    ],
+    "ROUNDDOWN": [
+      "rounded down"
+    ],
+    "UPPER": [
+      "in uppercase",
+      "in upper case",
+      "in capitals",
+      "in capital letters"
+    ],
+    "LOWER": [
+      "in lowercase",
+      "in lower case",
+      "in small letters"
+    ],
+    "TRIMMED": [
+      "trimmed"
+    ],
+    "REPLACED": [
+      "replaced by",
+      "replaced with"
+    ],
+    "JOINED": [
+      "joined with",
+      "joined by",
+      "joined using"
+    ],
+    "JOINED_TOGETHER": [
+      "joined together",
+      "joined"
+    ],
+    "SPLIT": [
+      "split by",
+      "split on",
+      "split at"
+    ],
+    "WORDSOF": [
+      "words of",
+      "words in"
+    ],
+    "LINESOF": [
+      "lines of",
+      "lines in"
+    ],
+    "LETTERSOF": [
+      "letters of",
+      "characters of",
+      "letters in"
+    ],
+    "CONTENTS": [
+      "contents of"
+    ],
+    "ASNUMBER": [
+      "as number",
+      "as whole number",
+      "as integer"
+    ],
+    "ASDECIMAL": [
+      "as decimal",
+      "as decimal number"
+    ],
+    "ASTEXT": [
+      "as text"
+    ],
+    "ISNUMBER": [
+      "is number",
+      "is whole number"
+    ],
+    "ISNOTNUMBER": [
+      "is not number",
+      "is not whole number"
+    ],
+    "KNOWN": [
+      "is known"
+    ],
+    "UNKNOWN": [
+      "is unknown",
+      "is not known"
+    ],
+    "EXISTS": [
+      "exists"
+    ],
+    "ASK": [
+      "ask",
+      "ask user"
+    ],
+    "ANSWER_AS": [
+      "and remember answer as",
+      "and remember it as",
+      "remember answer as",
+      "and store answer in",
+      "and save answer as",
+      "and put answer in",
+      "and call answer",
+      "and keep answer as"
+    ],
+    "READ": [
+      "read"
+    ],
+    "ARGS": [
+      "arguments",
+      "command line arguments"
+    ],
+    "PERSIST": [
+      "remember everything in",
+      "save everything in",
+      "keep everything in"
+    ],
+    "LISTOF": [
+      "list of"
+    ],
+    "EMPTYLIST": [
+      "empty list",
+      "new list"
+    ],
+    "EMPTYMAP": [
+      "empty table",
+      "empty dictionary",
+      "empty map",
+      "new table"
     ]
   },
   "symbols": {
@@ -351,6 +568,7 @@
     "<=": "LE",
     "=": "IS",
     "!=": "NE",
-    "%": "MOD"
+    "%": "MOD",
+    "^": "POW"
   }
 }

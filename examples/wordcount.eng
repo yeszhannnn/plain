@@ -1,0 +1,10 @@
+Note: counts the words of a text file. Run it from the examples folder.
+
+read the file "data/poem.txt" into poem.
+set poem to poem in lowercase with "," replaced by "".
+for every term in the words of poem, add 1 to the count of term.
+
+say "The poem has" and then the number of items in the words of poem and then "words," and then the number of items in the count and then "of them different.".
+for every term in the count
+  if the count of term is more than 1, say term and then ":" and then the count of term.
+that's all.

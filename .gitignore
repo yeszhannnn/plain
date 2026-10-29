@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.ll
 build/
+*-memory.json
+*.tmp
+todo.txt

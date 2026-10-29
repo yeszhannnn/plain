@@ -1,0 +1,5 @@
+use "shapes.eng".
+
+greet "Ana".
+say "A 3 by 4 rectangle has an area of" and then the area of 3 by 4 and then ".".
+say "A circle with radius 2 has an area of" and then the circle area for 2 and then ".".

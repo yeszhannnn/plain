@@ -1,0 +1,29 @@
+Note: a to-do list kept in todo.txt.
+Note: try "engc.py run todo.eng add milk", then "engc.py run todo.eng", then "engc.py run todo.eng done 1".
+
+set path to "todo.txt".
+set tasks to an empty list.
+if the file path exists, set tasks to the lines of the file path.
+
+set command to "list".
+if the number of items in the arguments is more than 0, set command to item 1 of the arguments.
+
+if command is "add"
+  set task to item 2 of the arguments.
+  add task to tasks.
+  write tasks joined with a new line to the file path.
+  say "Added:" and then task.
+otherwise, if command is "done"
+  set number to item 2 of the arguments as a number.
+  say "Done:" and then item number of tasks.
+  remove item number from tasks.
+  if the number of items in tasks is 0, delete the file path.
+  otherwise write tasks joined with a new line to the file path.
+otherwise
+  if the number of items in tasks is 0, say "Nothing to do.".
+  set n to 0.
+  for every task in tasks
+    add 1 to n.
+    say n and then "." and then task.
+  that's all.
+that's all.
