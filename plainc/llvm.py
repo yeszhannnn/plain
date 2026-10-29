@@ -11,7 +11,7 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english, is_bot, walk_stmts)
+                   english, is_bot, walk_stmts, New, Field, Nothing)
 from .errors import EngError
 from .types import BOOL, FLOAT, INT, TEXT, desc
 
@@ -113,11 +113,15 @@ declare i64 @pl_msg_number()
 declare ptr @pl_user_slot(i32)
 declare void @pl_button(ptr)
 declare void @pl_out_reply()
-declare void @pl_persist(ptr, ptr, i32)"""
+declare void @pl_persist(ptr, ptr, i32)
+declare void @pl_register_kinds(ptr, i32)
+declare ptr @pl_obj_new(i32)
+declare i64 @pl_obj_get(ptr, i32, i32)
+declare void @pl_obj_set(ptr, i32, i32, i64)"""
 
 
 def llt(t):
-    return LLT[t.name]
+    return "ptr" if t.name.startswith("Kind:") else LLT[t.name]
 
 
 def san(name):
@@ -249,6 +253,8 @@ class Gen:
             return "false"
         if t.name == "Text":
             return self.string("")
+        if t.name.startswith("Kind:"):
+            return "null"
         if t.name == "List":
             return self.call("ptr", "pl_list_of", f"ptr {self.desc(t.args[0])}")
         return self.call("ptr", "pl_map_new", f"i32 {1 if t.args[0].name == 'Text' else 0}")
@@ -341,6 +347,20 @@ class Gen:
             return self.call_fn(e)
         if isinstance(e, Builtin):
             return self.builtin(e, t)
+        if isinstance(e, Nothing):
+            return "null"
+        if isinstance(e, Field):
+            o = self.expr(e.obj)
+            s = self.call("i64", "pl_obj_get", f"ptr {o}, i32 {e.kind.id}, i32 {e.kind.fields.index(e.field)}")
+            return self.from_slot(s, t)
+        if isinstance(e, New):
+            o = self.call("ptr", "pl_obj_new", f"i32 {e.kind.id}")
+            fields = dict(self.types.kind_fields(e.kind))
+            for key, x in e.inits:
+                v = self.conv(self.expr(x), self.T(x), fields[key])
+                self.call("void", "pl_obj_set", f"ptr {o}, i32 {e.kind.id}, i32 {e.kind.fields.index(key)}, "
+                                                f"i64 {self.to_slot(v, fields[key])}")
+            return o
         raise EngError(f"internal: no code for {e}")
 
     def lookup_slot(self, e, create=False):
@@ -393,6 +413,9 @@ class Gen:
         if lt.name == "Text":
             c = self.call("i32", "pl_text_cmp", f"ptr {a}, ptr {b}")
             f.emit(f"{r} = icmp {pred} i32 {c}, 0")
+            return r
+        if lt.name.startswith("Kind:"):
+            f.emit(f"{r} = icmp {pred} ptr {a}, {b}")
             return r
         if lt.name in ("List", "Map"):
             raise EngError("Lists and tables can't be compared with \"is\". Compare their items instead.",
@@ -536,6 +559,11 @@ class Gen:
         v = self.conv(v, vt, t)
         if isinstance(target, Var):
             self.f.emit(f"store {llt(t)} {v}, ptr {self.addr(target)}")
+        elif isinstance(target, Field):
+            o = self.expr(target.obj)
+            k = target.kind
+            self.call("void", "pl_obj_set", f"ptr {o}, i32 {k.id}, i32 {k.fields.index(target.field)}, "
+                                            f"i64 {self.to_slot(v, t)}")
         elif isinstance(target, Index):
             c = self.expr(target.container)
             i = self.expr(target.index) if target.index is not None else "-1"
@@ -782,6 +810,19 @@ class Gen:
         f = self.f = Fn(self, "define i32 @main(i32 %argc, ptr %argv)")
         self.sig = None
         f.emit("call void @pl_init(i32 %argc, ptr %argv)")
+        kinds = list(self.types.kinds.by_name.values()) if self.types.kinds else []
+        if kinds:
+            rows = []
+            for k in kinds:
+                fields = self.types.kind_fields(k)
+                names = ", ".join(f"ptr {self.string(k.field_display[f])}" for f, _ in fields)
+                descs = ", ".join(f"ptr {self.desc(t)}" for _, t in fields)
+                self.extra.append(f"@pl.kind{k.id}.fields = private constant [{len(fields)} x ptr] [{names}]")
+                self.extra.append(f"@pl.kind{k.id}.descs = private constant [{len(fields)} x ptr] [{descs}]")
+                rows.append(f"{{ptr, i32, ptr, ptr}} {{ptr {self.string(k.name)}, i32 {len(fields)}, "
+                            f"ptr @pl.kind{k.id}.fields, ptr @pl.kind{k.id}.descs}}")
+            self.extra.append(f"@pl.kinds = private constant [{len(rows)} x {{ptr, i32, ptr, ptr}}] [{', '.join(rows)}]")
+            f.emit(f"call void @pl_register_kinds(ptr @pl.kinds, i32 {len(rows)})")
         f.emit(f"store ptr {self.string(os.path.basename(self.file))}, ptr @pl_file")
         for name, _, t in self.globals_:
             f.emit(f"store {llt(t)} {self.zero(t)}, ptr @g.{san(name)}")

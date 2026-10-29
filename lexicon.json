@@ -554,6 +554,15 @@
       "empty dictionary",
       "empty map",
       "new table"
+    ],
+    "NOTHING": [
+      "nothing"
+    ],
+    "ISNOTHING": [
+      "is nothing"
+    ],
+    "ISSOMETHING": [
+      "is not nothing"
     ]
   },
   "symbols": {

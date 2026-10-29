@@ -66,4 +66,14 @@ int64_t pl_map_value_at(Map *m, int64_t key);
 
 char *pl_lower(const char *s);
 
+/* kinds of things declared in the program ("a book has a title and a year") */
+typedef struct {
+    const char *name;
+    int32_t nfields;
+    const char **fields;      /* field names as written */
+    const char **descs;       /* field type codes */
+} Kind;
+
+const Kind *pl_kind(const char *desc);   /* desc starts with 'K' */
+
 #endif

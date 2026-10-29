@@ -82,7 +82,9 @@ static int is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == 
 /* parts of a line are joined with one space, except around spaces and before punctuation */
 void buf_piece(Buf *b, const char *s) {
     if (!s || !*s) return;
-    if (b->n && !is_space(b->p[b->n - 1]) && !is_space(s[0]) && !strchr(".,!?;:)", s[0])) buf_putc(b, ' ');
+    if (b->n && !is_space(b->p[b->n - 1]) && !strchr("([", b->p[b->n - 1]) && !is_space(s[0]) &&
+        !strchr(".,!?;:)", s[0]))
+        buf_putc(b, ' ');
     buf_puts(b, s);
 }
 
@@ -96,8 +98,38 @@ void pl_format_float(char *out, size_t size, double x) {
 const char *pl_skip_desc(const char *d) {
     if (*d == 'L') return pl_skip_desc(d + 1);
     if (*d == 'M') return pl_skip_desc(pl_skip_desc(d + 1));
+    if (*d == 'K') return strchr(d, '.') + 1;
     return d + 1;
 }
+
+/* ── things of declared kinds: a row of slots, one per field ── */
+
+static const Kind *kinds;
+static int nkinds;
+
+void pl_register_kinds(const Kind *table, int32_t n) {
+    kinds = table;
+    nkinds = n;
+}
+
+const Kind *pl_kind(const char *desc) { return &kinds[atoi(desc + 1)]; }
+
+int64_t *pl_obj_new(int32_t id) {
+    const Kind *k = &kinds[id];
+    int64_t *o = pl_alloc((k->nfields ? k->nfields : 1) * sizeof(int64_t));
+    for (int i = 0; i < k->nfields; i++) o[i] = pl_zero_slot(k->descs[i]);
+    return o;
+}
+
+static int64_t *object(int64_t *o, int32_t id) {
+    if (!o) pl_fail("There is no %s here: it is nothing.", kinds[id].name);
+    return o;
+}
+
+int64_t pl_obj_get(int64_t *o, int32_t id, int32_t field) { return object(o, id)[field]; }
+void pl_obj_set(int64_t *o, int32_t id, int32_t field, int64_t v) { object(o, id)[field] = v; }
+
+static int format_depth;
 
 const char *pl_format(Buf *b, int64_t v, const char *d) {
     char tmp[64];
@@ -124,6 +156,28 @@ const char *pl_format(Buf *b, int64_t v, const char *d) {
         for (int64_t i = 0; l && i < l->len; i++) {
             if (i) buf_puts(b, i == l->len - 1 ? " and " : ", ");
             pl_format(b, l->items[i], d + 1);
+        }
+        return pl_skip_desc(d);
+    }
+    case 'K': {
+        const Kind *k = pl_kind(d);
+        int64_t *o = (int64_t *)(intptr_t)v;
+        if (!o) buf_puts(b, "nothing");
+        else if (format_depth >= 3) {
+            buf_puts(b, k->name);
+            buf_puts(b, " (...)");
+        } else {
+            format_depth++;
+            buf_puts(b, k->name);
+            buf_puts(b, " (");
+            for (int i = 0; i < k->nfields; i++) {
+                if (i) buf_puts(b, ", ");
+                buf_puts(b, k->fields[i]);
+                buf_puts(b, ": ");
+                pl_format(b, o[i], k->descs[i]);
+            }
+            buf_putc(b, ')');
+            format_depth--;
         }
         return pl_skip_desc(d);
     }

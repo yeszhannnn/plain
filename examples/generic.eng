@@ -1,0 +1,28 @@
+Note: kinds of things and functions that work with any kind of value.
+
+a point has an x and a y.
+a shape has a name, a corner and a size.
+
+to find the area of a shape, give back the size of the shape times the size of the shape.
+to move a point by some steps
+  add the steps to the x of the point.
+  add the steps to the y of the point.
+that's all.
+
+set square to a new shape with name "square", corner a new point with x 1 and y 2, and size 3.
+say square.
+move the corner of square by 10.
+say "After moving:" and then the corner of square.
+say "Area:" and then the area of square.
+
+to find the first of some things, give back item 1 of the things.
+to find the last of some things, give back the last item of the things.
+say the first of (5, 6 and 7) and then the last of ("a", "b" and "c").
+say the first of (2.5 and 3.5).
+
+to mention twice someone
+  say someone.
+  say someone.
+that's all.
+mention twice "echo".
+mention twice 42.

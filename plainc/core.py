@@ -124,6 +124,36 @@ class Call:
     def __str__(self): return f"Call({self.func.name}{', ' if self.args else ''}{_args(self.args)})"
 
 @dataclass(eq=False)
+class KindInfo:
+    """A kind of thing declared with "a book has a title, an author and a year"."""
+    name: str                 # "book"
+    display: str
+    fields: list              # field keys in order: ["title", "author", "year"]
+    field_display: dict       # key -> words as written: {"first_name": "first name"}
+    id: int = 0
+    line: int = 0
+    file: str = ""
+
+@dataclass(eq=False)
+class New:
+    kind: object              # KindInfo
+    inits: list               # (field key, expression)
+    def __str__(self):
+        inits = ", ".join(f"{k}={v}" for k, v in self.inits)
+        return f"New({self.kind.name}{', ' if inits else ''}{inits})"
+
+@dataclass(eq=False)
+class Field:
+    obj: object
+    field: str                # field key
+    display: str = ""
+    def __str__(self): return f"Field({self.obj}, {self.field})"
+
+@dataclass(eq=False)
+class Nothing:
+    def __str__(self): return "Nothing"
+
+@dataclass(eq=False)
 class Msg:
     def __str__(self): return "Message"
 
@@ -310,6 +340,8 @@ class FuncSig:
     file: str = ""
     body: list = field(default_factory=list)
     uses_bot: bool = False
+    param_kinds: dict = field(default_factory=dict)   # parameter -> KindInfo ("to describe a book")
+    origin: object = None     # for a copy of a generic function: the function it was made from
 
 
 # Markers produced by the sentence parser while building blocks.
@@ -406,4 +438,35 @@ def english(e, top=True):
         return s if top else f"({s})"
     if isinstance(e, Builtin):
         return f"{e.name.replace('_', ' ')} of {', '.join(english(a, False) for a in e.args)}"
+    if isinstance(e, Field):
+        return f"the {e.display or e.field} of {english(e.obj, False)}"
+    if isinstance(e, New):
+        return f"a new {e.kind.display}"
+    if isinstance(e, Nothing):
+        return "nothing"
     return str(e)
+
+
+def clone_body(body, old_name, new_name):
+    """A fresh copy of a function body for one use of a generic function.
+
+    Functions and kinds are shared, not copied; types from earlier checks are dropped;
+    local variables move to the new function's name."""
+    from dataclasses import fields as dc_fields, is_dataclass
+    import copy
+
+    def walk(x):
+        if isinstance(x, list):
+            return [walk(i) for i in x]
+        if isinstance(x, tuple):
+            return tuple(walk(i) for i in x)
+        if not is_dataclass(x) or isinstance(x, (FuncSig, KindInfo)):
+            return x
+        new = copy.copy(x)
+        for f in dc_fields(x):
+            setattr(new, f.name, walk(getattr(x, f.name)))
+        new.__dict__.pop("ty", None)
+        if isinstance(new, Var) and new.func == old_name:
+            new.func = new_name
+        return new
+    return walk(body)

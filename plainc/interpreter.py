@@ -13,10 +13,11 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english)
+                   english, New, Field, Nothing)
 from .errors import EngError
 from .types import prune
-from .values import (DEC_RE, INT_RE, fmt, join_parts, lines_of, lower, text_same, upper, words_of, wrap)
+from .values import (DEC_RE, INT_RE, KINDS, Obj, fmt, join_parts, lines_of, lower, text_same, upper, words_of,
+                     wrap)
 
 
 class BreakSignal(Exception):
@@ -37,8 +38,12 @@ class ExitSignal(Exception):
 
 
 def zero(t):
-    return {"Int": 0, "Float": 0.0, "Text": "", "Bool": False}.get(t.name) if t.name not in ("List", "Map") else \
-        ([] if t.name == "List" else {})
+    """The value every name starts with: 0, 0.0, "", false, an empty list or table, or nothing."""
+    if t.name == "List":
+        return []
+    if t.name == "Map":
+        return {}
+    return {"Int": 0, "Float": 0.0, "Text": "", "Bool": False}.get(t.name)
 
 
 def coerce(v, t):
@@ -122,6 +127,10 @@ class Interpreter:
             self.local_types.setdefault(func, {})[name] = t
         self.frames = []
         self.users = {}
+        KINDS.clear()
+        if types.kinds:
+            for kind in types.kinds.by_name.values():
+                KINDS[kind.name] = [(f, kind.field_display[f], t) for f, t in types.kind_fields(kind)]
         self.ctx = {}
         self.bot = None
 
@@ -169,6 +178,8 @@ class Interpreter:
         value = coerce(value, t)
         if isinstance(target, Var):
             self.scope(target)[target.name] = value
+        elif isinstance(target, Field):
+            self.obj(target).fields[target.field] = value
         elif isinstance(target, Index):
             c = self.ev(target.container)
             i = self.ev(target.index) if target.index is not None else len(c)
@@ -176,6 +187,12 @@ class Interpreter:
             c[i - 1] = value
         else:
             self.ev(target.table)[self.ev(target.key)] = value
+
+    def obj(self, e):
+        o = self.ev(e.obj)
+        if o is None:
+            self.fail(f"There is no {e.kind.name} here: it is nothing.")
+        return o
 
     # ── expressions ──
 
@@ -235,6 +252,16 @@ class Interpreter:
             return self.call(e)
         if isinstance(e, Builtin):
             return self.builtin(e)
+        if isinstance(e, Field):
+            return self.obj(e).fields[e.field]
+        if isinstance(e, Nothing):
+            return None
+        if isinstance(e, New):
+            fields = {f: zero(t) for f, _, t in KINDS[e.kind.name]}
+            types = {f: t for f, _, t in KINDS[e.kind.name]}
+            for key, x in e.inits:
+                fields[key] = coerce(self.ev(x), types[key])
+            return Obj(e.kind.name, fields)
         self.fail(f"internal: unknown expression {e}")
 
     def arith(self, e):
@@ -565,6 +592,8 @@ class Interpreter:
 
     def save(self, path):
         def enc(v, t):
+            if t.name.startswith("Kind:"):
+                return None if v is None else {d: enc(v.fields[k], ft) for k, d, ft in KINDS[t.name[5:]]}
             if t.name == "List":
                 return [enc(x, t.args[0]) for x in v]
             if t.name == "Map":
@@ -586,6 +615,10 @@ class Interpreter:
             return
 
         def dec(v, t):
+            if t.name.startswith("Kind:"):
+                if not isinstance(v, dict):
+                    return None
+                return Obj(t.name[5:], {k: dec(v[d], ft) if d in v else zero(ft) for k, d, ft in KINDS[t.name[5:]]})
             if t.name == "List":
                 return [dec(x, t.args[0]) for x in v] if isinstance(v, list) else []
             if t.name == "Map":

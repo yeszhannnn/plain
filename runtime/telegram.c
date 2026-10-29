@@ -109,6 +109,23 @@ static void save_value(Buf *b, int64_t v, const char *d) {
         break;
     case 's': json_text(b, (const char *)(intptr_t)v); break;
     case 'b': buf_puts(b, v ? "true" : "false"); break;
+    case 'K': {
+        const Kind *k = pl_kind(d);
+        int64_t *o = (int64_t *)(intptr_t)v;
+        if (!o) {
+            buf_puts(b, "null");
+            break;
+        }
+        buf_putc(b, '{');
+        for (int i = 0; i < k->nfields; i++) {
+            if (i) buf_puts(b, ", ");
+            json_text(b, k->fields[i]);
+            buf_puts(b, ": ");
+            save_value(b, o[i], k->descs[i]);
+        }
+        buf_putc(b, '}');
+        break;
+    }
     case 'L': {
         List *l = (List *)(intptr_t)v;
         buf_putc(b, '[');
@@ -152,6 +169,16 @@ static int64_t load_value(J *j, const char *d) {
     }
     case 's': return (int64_t)(intptr_t)pl_strdup(j && j->type == J_STR ? j->s : "");
     case 'b': return j && j->type == J_BOOL ? j->i : 0;
+    case 'K': {
+        if (!j || j->type != J_OBJ) return 0;
+        const Kind *k = pl_kind(d);
+        int64_t *o = pl_alloc((k->nfields ? k->nfields : 1) * sizeof(int64_t));
+        for (int i = 0; i < k->nfields; i++) {
+            J *f = jget(j, k->fields[i]);
+            o[i] = f ? load_value(f, k->descs[i]) : pl_zero_slot(k->descs[i]);
+        }
+        return (int64_t)(intptr_t)o;
+    }
     case 'L': {
         List *l = pl_list_of(d + 1);
         for (int k = 0; j && j->type == J_ARR && k < j->len; k++) pl_list_add(l, load_value(j->items[k], d + 1));

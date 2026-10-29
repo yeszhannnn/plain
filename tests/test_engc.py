@@ -141,6 +141,45 @@ class Language(unittest.TestCase):
         self.assertEqual(out, "Age? Please type a whole number.\nAge? 42\n")
 
 
+class Objects(unittest.TestCase):
+    BOOK = 'a book has a title, an author and a year.\n'
+
+    def test_fields_and_printing(self):
+        text = self.BOOK + ('set dune to a new book with title "Dune", author "Frank Herbert", and year 1965.\n'
+                            "say the title of dune. say dune's author. add 1 to the year of dune. say dune.\n")
+        self.assertEqual(run_text(text), "Dune\nFrank Herbert\nbook (title: Dune, author: Frank Herbert, year: 1966)\n")
+
+    def test_methods_and_lists_of_things(self):
+        text = self.BOOK + ('to describe a book, say the title of the book and then "(" and then the year of the book '
+                            'and then ")".\nset shelf to an empty list.\n'
+                            'add a new book with title "Emma" and year 1815 to shelf.\n'
+                            'for every book in shelf, describe book.\n')
+        self.assertEqual(run_text(text), "Emma (1815)\n")
+
+    def test_nothing(self):
+        text = ("a node has a value and a next.\nset n to a new node with value 1.\n"
+                "if the next of n is nothing, say \"end\".\nset the next of n to n.\n"
+                "if the next of n is not nothing, say \"loop\".\nsay n.\n")
+        self.assertEqual(run_text(text), "end\nloop\nnode (value: 1, next: node (value: 1, next: node (value: 1, "
+                                         "next: node (...))))\n")
+
+    def test_generic_functions(self):
+        text = ("to find the first of some things, give back item 1 of the things.\n"
+                "to find the twofold of a number, give back the number times 2.\n"
+                'say the first of (5, 6 and 7) and then the first of ("a" and "b").\n'
+                "say the twofold of 21 and then the twofold of 1.25.\n")
+        self.assertEqual(run_text(text), "5 a\n42 2.5\n")
+
+    def test_object_errors(self):
+        with self.assertRaises(EngError):
+            engc.compile_source(self.BOOK + 'set b to a new book with title "x".\nset the title of b to 5.\n')
+        text = ("a node has a value and a next.\nset n to a new node with value 1.\n"
+                "set m to a new node with value 2 and next n.\nsay the value of the next of n.\n")
+        a, b = interpreted(text), native(text)
+        self.assertEqual(a, b)
+        self.assertIn("There is no node here: it is nothing.", a[1])
+
+
 class Errors(unittest.TestCase):
     def test_plus_times_is_ambiguous(self):
         with self.assertRaises(AmbiguityError) as cm:

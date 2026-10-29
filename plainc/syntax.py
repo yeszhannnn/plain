@@ -29,6 +29,7 @@ class Lexicon:
         self.phrase_starts = {p[:2] for p in self.phrases if len(p) > 1}
         self.print_forms = {p[0] for p, kw in self.phrases.items() if kw in ("PRINT", "REPLY") and len(p) == 1}
         self.single_forms = sorted(p[0] for p in self.phrases if len(p) == 1)
+        self.protected = set()   # field names: never dropped as label words ("the value of a node")
 
 
 @dataclass
@@ -222,7 +223,7 @@ def normalize(toks, lx):
     for i, t in enumerate(toks):
         nxt = toks[i + 1] if i + 1 < len(toks) else None
         prev = toks[i - 1] if i > 0 else None
-        if t.kind == "WORD" and t.value in lx.label_words and nxt is not None and (
+        if t.kind == "WORD" and t.value in lx.label_words and t.value not in lx.protected and nxt is not None and (
                 nxt.kind in ("STR", "NUM", "DEC") or
                 (prev is not None and prev.kind == "WORD" and prev.value in lx.print_forms and nxt.kind == "WORD"
                  and (t.value, nxt.value) not in lx.phrase_starts)):
@@ -249,7 +250,7 @@ def apply_lexicon(toks, lx):
                 window = toks[i:i + n]
                 if all(w.kind == "WORD" for w in window):
                     key = tuple(w.value for w in window)
-                    if key in lx.phrases:
+                    if key in lx.phrases and not (n > 1 and key[0] in lx.protected and key[1] == "of"):
                         out.append(Tok(lx.phrases[key], " ".join(key), " ".join(w.text for w in window)))
                         i += n
                         matched = True

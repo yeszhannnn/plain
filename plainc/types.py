@@ -14,7 +14,7 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english)
+                   english, New, Field, Nothing, FuncSig, clone_body)
 from .errors import EngError
 
 
@@ -85,16 +85,38 @@ def words(t, plural=False):
         return "yes/no values" if plural else "a yes/no value"
     if t.name == "Nothing":
         return "nothing"
+    if t.name.startswith("Kind:"):
+        return f"{t.name[5:]}s" if plural else f"a {t.name[5:]}"
     if t.name == "List":
         return "lists" if plural else f"a list of {words(t.args[0], True)}"
     return "tables" if plural else f"a table from {words(t.args[0], True)} to {words(t.args[1], True)}"
 
 
+KIND_IDS = {}   # kind name -> number, set by check()
+
+
+def kind_con(kind):
+    return Con("Kind:" + kind.name)
+
+
+def is_kind(t):
+    t = con(t)
+    return t is not None and t.name.startswith("Kind:")
+
+
 def desc(t):
-    """Short type code the runtime uses for printing and saving: i f s b L<elem> M<key><value>."""
+    """Short type code the runtime uses for printing and saving:
+    i f s b, L<item>, M<key><value>, K<kind number>. (a thing of a declared kind)."""
     t = prune(t)
+    if t.name.startswith("Kind:"):
+        return f"K{KIND_IDS[t.name[5:]]}."
     return {"Int": "i", "Float": "f", "Text": "s", "Bool": "b"}.get(t.name) or \
         ("L" + desc(t.args[0]) if t.name == "List" else "M" + desc(t.args[0]) + desc(t.args[1]))
+
+
+def has_tvar(t):
+    t = prune(t)
+    return isinstance(t, TVar) or any(has_tvar(a) for a in t.args)
 
 
 def occurs(v, t):
@@ -138,12 +160,19 @@ class Constraint:
 
 
 class Checker:
-    def __init__(self, funcs):
+    def __init__(self, funcs, generic=()):
         self.funcs = funcs
         self.tvars = []
         self.vars = {}            # (scope, func, name) -> type
-        self.params = {s.name: [self.new() for _ in s.params] for s in funcs.sigs}
-        self.ret = {s.name: (self.new() if s.returns else NOTHING) for s in funcs.sigs}
+        self.kinds = getattr(funcs, "kinds", None)
+        kinds = self.kinds.by_name.values() if self.kinds else []
+        self.kind_fields = {k.name: {f: self.new() for f in k.fields} for k in kinds}
+        self.params, self.ret = {}, {}
+        for sig in funcs.sigs:
+            self.signature(sig)
+        self.generic = set(generic)   # functions checked again for every use, with that use's types
+        self.active = {}              # generic function -> the copy being checked (for recursion)
+        self.instances = []
         self.deferred = []
         self.line, self.file = 0, ""
         self.func = None
@@ -153,6 +182,13 @@ class Checker:
         self.calls = []           # (caller sig name or None, callee sig, in_handler, line, file)
         self.persist = None
         self.handlers = False
+
+    def signature(self, sig):
+        self.params[sig.name] = [self.new() for _ in sig.params]
+        self.ret[sig.name] = self.new() if sig.returns else NOTHING
+        for name, t in zip(sig.params, self.params[sig.name]):
+            if name in sig.param_kinds:
+                unify(t, kind_con(sig.param_kinds[name]))
 
     # ── helpers ──
 
@@ -335,7 +371,38 @@ class Checker:
             return self.call(e)
         if isinstance(e, Builtin):
             return self.builtin(e)
+        if isinstance(e, New):
+            fields = self.kind_fields[e.kind.name]
+            for key, x in e.inits:
+                self.flow(self.expr(x), fields[key],
+                          lambda s, d, key=key: f'The {e.kind.field_display[key]} of a {e.kind.name} holds '
+                                                f'{words(d)}, so it can\'t be {words(s)}.')
+            return kind_con(e.kind)
+        if isinstance(e, Field):
+            return self.field(e)
+        if isinstance(e, Nothing):
+            t = self.new()
+            self.when_known(t, lambda c: c.name.startswith("Kind:") or self.fail(
+                f'Only things of a kind you described (like "a book has a title") can be nothing, not {words(c)}.'))
+            return t
         self.fail(f"internal: unknown expression {e}")
+
+    def field(self, e):
+        o, r = self.expr(e.obj), self.new()
+
+        def decide(c):
+            if not c.name.startswith("Kind:"):
+                self.fail(f'"{english(e.obj)}" is {words(c)}, so it has no {e.display}.')
+            kname = c.name[5:]
+            fields = self.kind_fields[kname]
+            if e.field not in fields:
+                self.fail(f'A {kname} has no {e.display}. It has: '
+                          f'{", ".join(self.kinds.by_name[kname].field_display[f] for f in fields)}.')
+            e.kind = self.kinds.by_name[kname]
+            self.eq(r, fields[e.field], lambda: f'The {e.display} of a {kname} is {words(fields[e.field])}, '
+                                                f'not {words(r)}.')
+        self.when_known(o, decide)
+        return r
 
     def arith(self, e, l, r, res):
         what = lambda: (f'I can only do arithmetic with numbers, but "{english(e)}" uses {words(l)} '
@@ -438,11 +505,28 @@ class Checker:
 
     def call(self, e):
         sig = e.func
+        if sig.name in self.generic:
+            sig = e.func = self.active.get(sig.name) or self.instantiate(sig)
         for a, p in zip(e.args, self.params[sig.name]):
             self.flow(self.expr(a), p, lambda s, d: f'"{sig.display}" got {words(s)} for a value that is '
                                                     f'{words(d)} elsewhere.')
         self.calls.append((self.func.name if self.func else None, sig, self.in_handler, self.line, self.file))
         return self.ret[sig.name]
+
+    def instantiate(self, sig):
+        """A copy of a generic function for one place where it is used."""
+        inst = FuncSig(f"{sig.name}_v{len(self.instances)}", sig.display, sig.pattern, sig.params, sig.returns,
+                       sig.line, sig.file, clone_body(sig.body, sig.name, f"{sig.name}_v{len(self.instances)}"),
+                       param_kinds=sig.param_kinds, origin=sig)
+        self.signature(inst)
+        self.instances.append(inst)
+        saved = self.func, self.loops, self.line, self.file, self.in_handler
+        self.active[sig.name] = inst
+        self.in_handler = False
+        self.function(inst)
+        del self.active[sig.name]
+        self.func, self.loops, self.line, self.file, self.in_handler = saved
+        return inst
 
     def builtin(self, e):
         n, args = e.name, e.args
@@ -629,7 +713,8 @@ class Checker:
             self.block(s.body)
             self.in_handler = False
         elif isinstance(s, FuncDef):
-            self.function(s.sig)
+            if s.sig.name not in self.generic:
+                self.function(s.sig)
         else:
             self.fail(f"internal: unknown statement {s}")
 
@@ -750,6 +835,16 @@ class Checker:
             if isinstance(prune(v), TVar):
                 prune(v).ref = INT
 
+    def settle(self):
+        """Solve what can be solved without guessing (used to find generic functions)."""
+        progress = True
+        while progress:
+            progress = False
+            for c in list(self.deferred):
+                if c.step(False):
+                    self.deferred.remove(c)
+                    progress = True
+
     def check_bot_calls(self):
         uses = set(self.direct_bot)
         changed = True
@@ -759,7 +854,7 @@ class Checker:
                 if caller and callee.name in uses and caller not in uses:
                     uses.add(caller)
                     changed = True
-        for sig in self.funcs.sigs:
+        for sig in self.funcs.sigs + self.instances:
             sig.uses_bot = sig.name in uses
         for caller, callee, in_handler, line, file in self.calls:
             if caller is None and not in_handler and callee.name in uses:
@@ -786,6 +881,10 @@ class Types:
         self.checker = checker
         self.params = checker.params
         self.ret = checker.ret
+        self.kinds = checker.kinds
+
+    def kind_fields(self, kind):
+        return [(f, deep(self.checker.kind_fields[kind.name][f])) for f in kind.fields]
 
     def of(self, e):
         return deep(e.ty)
@@ -803,12 +902,35 @@ class Types:
         return deep(self.ret[sig.name])
 
 
+def find_generic(funcs):
+    """Functions whose values stay open after checking the body on its own: they work with any type."""
+    generic = set()
+    for sig in funcs.sigs:
+        scratch = Checker(funcs)
+        try:
+            scratch.function(sig)
+            scratch.settle()
+        except EngError:
+            continue
+        if any(has_tvar(t) for t in scratch.params[sig.name] + ([scratch.ret[sig.name]] if sig.returns else [])):
+            generic.add(sig.name)
+    return generic
+
+
 def check(prog, funcs):
-    c = Checker(funcs)
+    kinds = getattr(funcs, "kinds", None)
+    KIND_IDS.clear()
+    if kinds:
+        KIND_IDS.update({name: k.id for name, k in kinds.by_name.items()})
+    generic = find_generic(funcs)
+    c = Checker(funcs, generic)
     setup = [s for s in prog if not isinstance(s, (Handler, FuncDef))]
     c.block(setup)
     c.block([s for s in prog if isinstance(s, FuncDef)])
     c.block([s for s in prog if isinstance(s, Handler)])
     c.solve()
     c.check_bot_calls()
+    # backends see one function per generic use, with known types
+    prog[:] = [s for s in prog if not (isinstance(s, FuncDef) and s.sig.name in generic)] + \
+        [FuncDef(i) for i in c.instances]
     return Types(c)

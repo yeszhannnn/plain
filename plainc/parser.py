@@ -13,7 +13,7 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    ElseMark, EmptyMap, End, Exit, ForEach, ForRange, FuncDef, FuncSig, Handler, If, Index, IsNum,
                    ListLit, Logic, Lookup, Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem,
                    RemoveAt, RemoveKey, RemoveValue, Repeat, Reply, Return, Reverse, Seq, Slice, Sort, Text, Truth,
-                   Var, While, WriteFile, english)
+                   Var, While, WriteFile, english, KindInfo, New, Field, Nothing)
 from .errors import AmbiguityError, EngError
 from .syntax import USER, Lexicon, Tok, apply_lexicon, canonical, normalize, show, split_sentences, tokenize
 
@@ -31,7 +31,7 @@ INDEX_WORDS = {"item", "letter", "character"}
 SLICE_WORDS = {"items", "letters", "characters"}
 VALUE_MARKERS = {"find", "calculate", "compute", "get"}
 PARAM_INTRO = {"a", "an", "some"}
-PARAM_SELF = {"someone", "somebody", "something"}
+PARAM_SELF = {"someone", "somebody"}
 PLACEHOLDER = "zzparam"
 
 
@@ -107,7 +107,7 @@ def describe(target):
     """A settable target in English: a name, item N of a list, or an entry of a table."""
     if target[0] == "var":
         return target[1].text
-    if target[0] == "index":
+    if target[0] in ("index", "field"):
         return english(target[1])
     return f"{target[1].text} of {english(target[2])}"
 
@@ -119,6 +119,64 @@ def lit_match(el, tok):
     return tok.value == value if kind in ("WORD", "NUM") else True
 
 
+# ───────────── kinds of things ─────────────
+
+KIND_INTRO = ("a", "an", "every", "each")
+
+
+def is_kind_decl(text):
+    words = text.strip().split()
+    return len(words) >= 4 and words[0].lower() in KIND_INTRO and words[2].lower() in ("has", "have")
+
+
+class Kinds:
+    def __init__(self):
+        self.by_name = {}         # "book" -> KindInfo
+        self.fields = {}          # field key -> tuple of words, for every kind
+        self.by_header = {}       # (file, line) -> KindInfo
+
+    def add(self, kind):
+        kind.id = len(self.by_name)
+        self.by_name[kind.name] = kind
+        self.by_header[(kind.file, kind.line)] = kind
+        for key in kind.fields:
+            self.fields[key] = tuple(key.split("_"))
+
+    def match_field(self, toks, i):
+        """Field names (longest first) whose words start at toks[i]."""
+        out = []
+        for key, words in self.fields.items():
+            n = len(words)
+            if all(i + k < len(toks) and is_word(toks[i + k], words[k]) for k in range(n)):
+                out.append((key, i + n))
+        return sorted(out, key=lambda c: -c[1])
+
+
+def parse_kind_decl(sentence, lx, kinds):
+    def fail(msg):
+        raise EngError(msg, sentence.line, sentence.file)
+    toks = canonical(sentence.text, sentence.line, sentence.file, lx)
+    if toks and is_word(toks[0], "every", "each"):
+        toks = toks[1:]
+    if len(toks) < 3 or toks[0].kind != "WORD" or not is_word(toks[1], "has", "have"):
+        fail("Write it like: a book has a title, an author and a year.")
+    name = toks[0].value
+    if name in kinds.by_name:
+        fail(f'"{name}" is already described above.')
+    fields, display = [], {}
+    parts = split_top(toks[2:], ("COMMA", "AND"))
+    parts = [p for k, p in enumerate(parts) if p or not (k and toks[2:] and k < len(parts) - 1)]   # ", and"
+    for part in parts:
+        if not part or any(t.kind != "WORD" for t in part):
+            fail(f'"{show(part)}" can\'t be the name of a field: use plain words that are not part of the language.')
+        key = "_".join(t.value for t in part)
+        if key in fields:
+            fail(f'A {name} already has a {" ".join(t.text for t in part)}.')
+        fields.append(key)
+        display[key] = " ".join(t.text for t in part)
+    return KindInfo(name, toks[0].text, fields, display, line=sentence.line, file=sentence.file)
+
+
 # ───────────── function headers ─────────────
 
 def header_split(text, line, file):
@@ -128,7 +186,7 @@ def header_split(text, line, file):
     return raw[1:cut] if cut is not None else raw[1:], (raw[cut + 1:] if cut is not None else None)
 
 
-def parse_header(sentence, lx, number):
+def parse_header(sentence, lx, number, kinds=None):
     words, _ = header_split(sentence.text, sentence.line, sentence.file)
 
     def fail(msg):
@@ -178,7 +236,10 @@ def parse_header(sentence, lx, number):
     name = "_".join(str(el[2]) for el in lits)
     name = "".join(ch if ch.isalnum() else "_" for ch in name) + f"_{number}"
     display = " ".join(w.text for w in words)
-    return FuncSig(name, display, pattern, params, returns, sentence.line, sentence.file)
+    sig = FuncSig(name, display, pattern, params, returns, sentence.line, sentence.file)
+    if kinds is not None:
+        sig.param_kinds = {p: kinds.by_name[p] for p in params if p in kinds.by_name}
+    return sig
 
 
 class Funcs:
@@ -206,9 +267,11 @@ class Funcs:
 # ───────────── the parser ─────────────
 
 class Parser:
-    def __init__(self, lx, funcs):
+    def __init__(self, lx, funcs, kinds=None):
         self.lx = lx
         self.funcs = funcs
+        self.kinds = kinds or Kinds()
+        self.tables = set()     # names created as tables ("the price of x is ..."); "of" after them is a lookup
         self.globals = {}       # name -> display
         self.user_vars = {}     # their.x -> display
         self.func = None        # FuncSig while parsing a body
@@ -312,6 +375,8 @@ class Parser:
             return [(ListLit([]), i + 1)]
         if k == "EMPTYMAP":
             return [(EmptyMap(), i + 1)]
+        if k == "NOTHING":
+            return [(Nothing(), i + 1)]
         if k == "LISTOF":
             items, j = self.item_list(toks, i + 1)
             return [(ListLit(items), j)] if items else []
@@ -367,6 +432,16 @@ class Parser:
         if known:
             res.append((self.make_var(t.value), i + 1))
         nxt = toks[i + 1] if i + 1 < len(toks) else None
+        if t.value == "new" and nxt is not None and nxt.kind == "WORD" and nxt.value in self.kinds.by_name:
+            res += self.new_object(self.kinds.by_name[nxt.value], toks, i + 2)
+        if t.value not in self.tables:
+            for key, j in self.kinds.match_field(toks, i):
+                if is_word(toks[j] if j < len(toks) else None, "of"):
+                    res += [(Field(o, key, " ".join(x.text for x in toks[i:j])), m) for o, m in self.tight(toks, j + 1)]
+        if "." in t.value and not t.value.startswith(USER):
+            base, _, fld = t.value.partition(".")
+            if self.scope_of(base) is not None and fld in self.kinds.fields:
+                res.append((Field(self.make_var(base), fld, fld.replace("_", " ")), i + 1))
         if t.value in INDEX_WORDS:
             for n, j in self.exprs(toks, i + 1):
                 if is_word(toks[j] if j < len(toks) else None, "of"):
@@ -385,9 +460,38 @@ class Parser:
             res += [(Builtin("file_text", [p]), j) for p, j in self.tight(toks, i + 1)]
         if known:
             return res
-        if "." in t.value and not res:
-            self.err(f'I don\'t know "{t.text}" yet. Set it first, for example: set {t.text} to 0.')
+        if "." in t.value:
+            if not res:
+                self.err(f'I don\'t know "{t.text}" yet. Set it first, for example: set {t.text} to 0.')
+            return res
         return res + [(Text(t.text), i + 1)]   # an unknown single word is just text
+
+    def may_be_table(self, name):
+        """ "X of Y" is an entry of table X if X was made a table, or if no field or function uses that word."""
+        if name in self.tables:
+            return True
+        return name not in self.kinds.fields and name not in self.funcs.first_words()
+
+    def new_object(self, kind, toks, i):
+        """a new book [with title "Dune", author "Frank Herbert" and year 1965]"""
+        res = [(New(kind, []), i)]
+        if not is_word(toks[i] if i < len(toks) else None, "with"):
+            return res
+
+        def inits(j, done):
+            out = []
+            for key, k in self.kinds.match_field(toks, j):
+                if key not in kind.fields or key in dict(done):
+                    continue
+                for e, m in self.exprs(toks, k):
+                    now = done + [(key, e)]
+                    out.append((New(kind, now), m))
+                    if m < len(toks) and toks[m].kind in ("COMMA", "AND"):
+                        nxt = m + 2 if toks[m].kind == "COMMA" and m + 1 < len(toks) and toks[m + 1].kind == "AND" \
+                            else m + 1     # "..., and year 1965"
+                        out += inits(nxt, now)
+            return out
+        return res + inits(i + 1, [])
 
     def postfixes(self, a, toks, j):
         if j >= len(toks):
@@ -423,7 +527,7 @@ class Parser:
         while todo:
             a, j = todo.pop(0)
             res.append((a, j))
-            if isinstance(a, Var) and j < len(toks) and is_word(toks[j], "of"):
+            if isinstance(a, Var) and j < len(toks) and is_word(toks[j], "of") and self.may_be_table(a.name):
                 todo += [(Lookup(a, key_), m) for key_, m in self.tight(toks, j + 1)]
         self.memo[key] = (toks, res)
         return res
@@ -563,13 +667,16 @@ class Parser:
             for e in self.expr_full(toks[:-1]):
                 test = Builtin("is_number", [e])
                 res.append(test if last == "ISNUMBER" else Logic("not", [test]))
+        if last in ("ISNOTHING", "ISSOMETHING"):
+            res += [Cmp("==" if last == "ISNOTHING" else "!=", e, Nothing()) for e in self.expr_full(toks[:-1])]
         if last == "EXISTS" and is_word(toks[0], "file"):
             res += [Builtin("file_exists", [p]) for p in self.expr_full(toks[1:-1])]
         cmps = top_positions(toks, CMPOPS)
         for k in cmps:
             res += [Cmp(CMPOPS[toks[k].kind], l, r)
                     for l in self.expr_full(toks[:k]) for r in self.expr_full(toks[k + 1:])]
-        if not cmps and last not in ("KNOWN", "UNKNOWN", "ISNUMBER", "ISNOTNUMBER", "EXISTS"):
+        if not cmps and last not in ("KNOWN", "UNKNOWN", "ISNUMBER", "ISNOTNUMBER", "EXISTS", "ISNOTHING",
+                                     "ISSOMETHING"):
             res += self.expr_full(toks)    # a yes/no value on its own: "if ready"
         return res
 
@@ -625,7 +732,7 @@ class Parser:
             if all(len(p) == 1 for p in parsed):
                 cands.append(ListLit([p[0] for p in parsed]))
         if top_positions(toks, CMPOPS) or toks[-1].kind in ("KNOWN", "UNKNOWN", "ISNUMBER", "ISNOTNUMBER",
-                                                           "EXISTS"):
+                                                           "EXISTS", "ISNOTHING", "ISSOMETHING"):
             cands += [c for c in self.conds(toks) if not isinstance(c, (Num, Dec, Text, Var))]
         return cands
 
@@ -637,6 +744,11 @@ class Parser:
     def targets(self, toks):
         """What can be set: a name, item N of a list, or an entry of a table."""
         res = []
+        if len(toks) == 1 and toks[0].kind == "WORD" and "." in toks[0].value and \
+                not toks[0].value.startswith(USER) and self.scope_of(toks[0].value.partition(".")[0]) is not None \
+                and toks[0].value.partition(".")[2] in self.kinds.fields:
+            base, _, fld = toks[0].value.partition(".")
+            return [("field", Field(self.make_var(base), fld, fld.replace("_", " ")))]
         if len(toks) == 1 and toks[0].kind in ("WORD", "IT"):
             t = toks[0]
             if t.kind == "IT":
@@ -645,8 +757,10 @@ class Parser:
                 t = Tok("WORD", self.last_var, self.make_var(self.last_var).display)
             res.append(("var", t))
         if toks and toks[0].kind == "WORD" and len(toks) > 2 and is_word(toks[1], "of") and \
-                toks[0].value not in INDEX_WORDS | {"first", "last", "file"}:
+                toks[0].value not in INDEX_WORDS | {"first", "last", "file"} and self.may_be_table(toks[0].value):
             res += [("key", toks[0], key) for key in self.expr_full(toks[2:])]
+        if toks and toks[0].kind == "WORD" and self.kinds.match_field(toks, 0):
+            res += [("field", e) for e in self.expr_full(toks) if isinstance(e, Field)]
         if toks and is_word(toks[0], *INDEX_WORDS, "first", "last"):
             res += [("index", e) for e in self.expr_full(toks) if isinstance(e, Index)]
         return res
@@ -655,9 +769,10 @@ class Parser:
         """Turn a chosen target into statements; a new table is created on first use."""
         if target[0] == "var":
             return value_stmt(self.define(target[1]))
-        if target[0] == "index":
+        if target[0] in ("index", "field"):
             return value_stmt(target[1])
         tok, key = target[1], target[2]
+        self.tables.add(tok.value)
         if self.scope_of(tok.value) is None:
             # a new table: every name starts out empty, so the first entry just goes in
             return value_stmt(Lookup(self.define(tok), key))
@@ -834,6 +949,8 @@ class Parser:
             return None
         target, v = self.choose(cands, "this", toks, key=lambda c: f"{describe(c[0])}|{c[1]}",
                                 render=lambda c: f"set {describe(c[0])} to {english(c[1])}")
+        if target[0] == "var" and isinstance(v, EmptyMap):
+            self.tables.add(target[1].value)
         return self.make_target(target, lambda t: self.at(Assign(t, v)))
 
     def try_is(self, toks):
@@ -979,11 +1096,16 @@ def load_sentences(src, file, seen, lx):
 def parse_program(src, file="", lx=None):
     lx = lx or Lexicon()
     sentences = load_sentences(src, file, {os.path.abspath(file)} if file else set(), lx)
+    kinds = Kinds()
+    for s in sentences:
+        if is_kind_decl(s.text):
+            kinds.add(parse_kind_decl(s, lx, kinds))
+    lx.protected = {w for words in kinds.fields.values() for w in words}
     funcs = Funcs()
     for s in sentences:
         if starts_with_word(s.text, "to"):
-            funcs.add(parse_header(s, lx, len(funcs.sigs)))
-    p = Parser(lx, funcs)
+            funcs.add(parse_header(s, lx, len(funcs.sigs), kinds))
+    p = Parser(lx, funcs, kinds)
     root = []
     stack = []  # frames: [kind, list, single_line, node]
 
@@ -1009,6 +1131,9 @@ def parse_program(src, file="", lx=None):
 
     for item in sentences:
         p.line, p.file = item.line, item.file
+        if is_kind_decl(item.text):
+            close_all()
+            continue
         if starts_with_word(item.text, "to"):
             close_all()
             sig = funcs.by_header[(item.file, item.line)]
@@ -1061,4 +1186,5 @@ def parse_program(src, file="", lx=None):
         if is_header(target):
             stack.append(header_frame(target, item.header_colon))
     close_all()
+    funcs.kinds = kinds
     return root, funcs

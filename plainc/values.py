@@ -3,6 +3,7 @@
 import re
 
 NO_SPACE_BEFORE = ".,!?;:)"
+NO_SPACE_AFTER = "(["
 
 # Upper -> lower case pairs: Latin, Latin-1, Cyrillic and the extra Kazakh letters.
 # runtime/text.c has the same table.
@@ -37,7 +38,8 @@ def join_parts(pieces):
     for s in pieces:
         if not s:
             continue
-        if out and out[-1] not in SPACE and s[0] not in SPACE and s[0] not in NO_SPACE_BEFORE:
+        if out and out[-1] not in SPACE and out[-1] not in NO_SPACE_AFTER and s[0] not in SPACE \
+                and s[0] not in NO_SPACE_BEFORE:
             out += " "
         out += s
     return out
@@ -63,9 +65,29 @@ def english_list(items):
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def fmt(v, t):
+KINDS = {}   # kind name -> [(field key, field words, field type)], set by the interpreter
+MAX_DEPTH = 3   # things inside things inside things are shortened to "book (...)"
+
+
+class Obj:
+    """A thing of a declared kind. Compared by identity, like objects in Java and Python."""
+    __slots__ = ("kind", "fields")
+
+    def __init__(self, kind, fields):
+        self.kind = kind
+        self.fields = fields
+
+
+def fmt(v, t, depth=0):
     """Text of a value for printing; t is the value's type (types.Con)."""
     name = t.name
+    if name.startswith("Kind:"):
+        kind = name[5:]
+        if v is None:
+            return "nothing"
+        if depth >= MAX_DEPTH:
+            return f"{kind} (...)"
+        return f"{kind} (" + ", ".join(f"{d}: {fmt(v.fields[k], ft, depth + 1)}" for k, d, ft in KINDS[kind]) + ")"
     if name == "Bool":
         return "true" if v else "false"
     if name == "Float":
@@ -75,10 +97,10 @@ def fmt(v, t):
     if name == "Text":
         return v
     if name == "List":
-        return english_list([fmt(x, t.args[0]) for x in v])
+        return english_list([fmt(x, t.args[0], depth) for x in v])
     if not v:
         return "nothing"
-    return ", ".join(f"{fmt(k, t.args[0])}: {fmt(x, t.args[1])}" for k, x in v.items())
+    return ", ".join(f"{fmt(k, t.args[0], depth)}: {fmt(x, t.args[1], depth)}" for k, x in v.items())
 
 
 def words_of(s):
