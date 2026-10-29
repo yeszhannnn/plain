@@ -1,5 +1,6 @@
 """Core IR -> LLVM IR text, linked with runtime/*.c (and Boehm GC) into a native executable."""
 
+import dataclasses
 import hashlib
 import os
 import shutil
@@ -65,6 +66,9 @@ declare i32 @pl_text_same(ptr, ptr)
 declare i32 @pl_contains(ptr, ptr)
 declare i32 @pl_starts(ptr, ptr)
 declare ptr @pl_text_glue(ptr, ptr)
+declare ptr @pl_text_append(ptr, ptr)
+declare void @pl_text_share(ptr)
+declare void @pl_list_bad_index(ptr, i64) noreturn cold
 declare i64 @pl_text_len(ptr)
 declare ptr @pl_text_char(ptr, i64)
 declare ptr @pl_text_slice(ptr, i64, i64)
@@ -224,9 +228,24 @@ class Gen:
         self.users = {name: k for k, (name, _, _) in enumerate(types.variables("user"))}
         self.user_types = {name: t for name, _, t in types.variables("user")}
         self.globals_ = types.variables("global")
+        self.main_locals = self.private_globals()
+        self.builders = {(t.scope, t.name) for t in walk_all(prog)
+                         if isinstance(t, AddTo) and t.kind == "text" and isinstance(t.target, Var)
+                         for t in [t.target]}
         self.extra = []
         files = {os.path.basename(getattr(s, "file", "") or file) for s in walk_all(prog)}
         self.one_file = len(files) <= 1     # then the file name is set once, at start-up
+
+    def private_globals(self):
+        """Top-level variables that no function and no bot rule touches: they become locals of main,
+        so LLVM can keep them in registers."""
+        if any(isinstance(st, (Handler, Persist)) for st in self.prog):
+            return set()
+        used = set()
+        for st in self.prog:
+            if isinstance(st, FuncDef):
+                used |= var_names(st.sig.body)
+        return {name for name, _, _ in self.globals_} - used
 
     # ── helpers ──
 
@@ -303,14 +322,16 @@ class Gen:
 
     def addr(self, v):
         if v.scope == "global":
-            return f"@g.{san(v.name)}"
+            return f"%m.{san(v.name)}" if v.name in self.main_locals else f"@g.{san(v.name)}"
         if v.scope == "local":
             return f"%l.{san(v.name)}"
         return self.call("ptr", "pl_user_slot", f"i32 {self.users[v.name]}")
 
     # ── expressions ──
 
-    def expr(self, e):
+    def expr(self, e, share=True):
+        """share=False: the value is only looked at right away (printed, compared, measured),
+        so a text that is being built in place may stay unshared."""
         t = self.T(e)
         f = self.f
         if isinstance(e, Num):
@@ -325,6 +346,8 @@ class Gen:
             a = self.addr(e)
             r = f.t()
             f.emit(f"{r} = load {llt(t)}, ptr {a}")
+            if share and (e.scope, e.name) in self.builders:
+                self.call("void", "pl_text_share", f"ptr {r}")
             return r
         if isinstance(e, Msg):
             return self.call("ptr", "pl_msg_text")
@@ -350,7 +373,7 @@ class Gen:
         if isinstance(e, RandomItem):
             return self.from_slot(self.call("i64", "pl_list_random", f"ptr {self.expr(e.items)}"), t)
         if isinstance(e, Concat):
-            vals = [(self.T(x), self.expr(x)) for x in e.parts]
+            vals = [(self.T(x), self.expr(x, False)) for x in e.parts]
             self.call("void", "pl_cat_begin")
             for pt, v in vals:
                 self.out_value("cat", v, pt)
@@ -375,7 +398,11 @@ class Gen:
             i = self.expr(e.index) if e.index is not None else "-1"
             if e.kind == "text":
                 return self.call("ptr", "pl_text_char", f"ptr {c}, i64 {i}")
-            return self.from_slot(self.call("i64", "pl_list_get", f"ptr {c}, i64 {i}"), t)
+            if e.index is None:
+                return self.from_slot(self.call("i64", "pl_list_get", f"ptr {c}, i64 {i}"), t)
+            r = f.t()
+            f.emit(f"{r} = load i64, ptr {self.item_ptr(c, i)}")
+            return self.from_slot(r, t)
         if isinstance(e, Slice):
             c, a, b = self.expr(e.container), self.expr(e.start), self.expr(e.end)
             fn = "pl_text_slice" if t.name == "Text" else "pl_list_slice"
@@ -456,7 +483,7 @@ class Gen:
     def compare(self, e):
         f = self.f
         lt, rt = self.T(e.left), self.T(e.right)
-        a, b = self.expr(e.left), self.expr(e.right)
+        a, b = self.expr(e.left, False), self.expr(e.right, False)
         if e.op == "~=":
             return self.truthy("pl_text_same", f"ptr {a}, ptr {b}")
         if e.op == "starts":
@@ -528,7 +555,7 @@ class Gen:
         f = self.f
         n = e.name
         ts = [self.T(a) for a in e.args]
-        vs = [self.expr(a) for a in e.args]
+        vs = [self.expr(a, n != "length") for a in e.args]
         a, at = (vs[0], ts[0]) if vs else (None, None)
         if n == "length":
             fn = {"Text": "pl_text_len", "List": "pl_list_len", "Map": "pl_map_len"}[at.name]
@@ -673,12 +700,44 @@ class Gen:
                                             f"i64 {self.to_slot(v, t)}")
         elif isinstance(target, Index):
             c = self.expr(target.container)
-            i = self.expr(target.index) if target.index is not None else "-1"
-            self.call("void", "pl_list_set", f"ptr {c}, i64 {i}, i64 {self.to_slot(v, t)}")
+            if target.index is None:
+                self.call("void", "pl_list_set", f"ptr {c}, i64 -1, i64 {self.to_slot(v, t)}")
+            else:
+                slot = self.to_slot(v, t)
+                self.f.emit(f"store i64 {slot}, ptr {self.item_ptr(c, self.expr(target.index))}")
         else:
             m = self.expr(target.table)
             k = self.to_slot(self.expr(target.key), self.T(target.key))
             self.call("void", "pl_map_set", f"ptr {m}, i64 {k}, i64 {self.to_slot(v, t)}")
+
+    def item_at(self, lst, k):
+        """Item k (counted from 0) of a list, already known to be there."""
+        f = self.f
+        pi, items, p, r = f.t(), f.t(), f.t(), f.t()
+        f.emit(f"{pi} = getelementptr inbounds i8, ptr {lst}, i64 16")
+        f.emit(f"{items} = load ptr, ptr {pi}")
+        f.emit(f"{p} = getelementptr inbounds i64, ptr {items}, i64 {k}")
+        f.emit(f"{r} = load i64, ptr {p}")
+        return r
+
+    def item_ptr(self, lst, i):
+        """Address of item i (counted from 1) of a list, after checking that the item is there."""
+        f = self.f
+        k, n, ok, items, p = f.t(), f.t(), f.t(), f.t(), f.t()
+        f.emit(f"{k} = sub i64 {i}, 1")
+        f.emit(f"{n} = load i64, ptr {lst}")
+        f.emit(f"{ok} = icmp ult i64 {k}, {n}")
+        good, bad = f.label("item.ok"), f.label("item.bad")
+        f.term(f"br i1 {ok}, label %{good}, label %{bad}, !prof !0")
+        f.start(bad)
+        f.emit(f"call void @pl_list_bad_index(ptr {lst}, i64 {i})")
+        f.term("unreachable")
+        f.start(good)
+        pi = f.t()
+        f.emit(f"{pi} = getelementptr inbounds i8, ptr {lst}, i64 16")
+        f.emit(f"{items} = load ptr, ptr {pi}")
+        f.emit(f"{p} = getelementptr inbounds i64, ptr {items}, i64 {k}")
+        return p
 
     def read_target(self, target):
         if isinstance(target, Lookup):
@@ -723,7 +782,9 @@ class Gen:
         f.start(body_label)
         pos = f.t()
         f.emit(f"{pos} = add i64 {i}, 1")
-        item = self.from_slot(self.call("i64", "pl_list_get", f"ptr {items}, i64 {pos}"), el)
+        got = f.t()
+        f.emit(f"{got} = load i64, ptr {self.item_ptr(items, pos)}")    # the list may have shrunk meanwhile
+        item = self.from_slot(got, el)
         self.write_target(var, item, el)
         body(step)
         f.start(step)
@@ -757,6 +818,11 @@ class Gen:
                 el = t.args[0]
                 self.call("void", "pl_list_add", f"ptr {lst}, i64 {self.to_slot(self.conv(v, vt, el), el)}")
                 return
+            if s.kind == "text" and isinstance(s.target, Var):     # grows in place while nothing else holds it
+                v = self.expr(s.expr, False)
+                cur = self.expr(s.target, False)
+                self.write_target(s.target, self.call("ptr", "pl_text_append", f"ptr {cur}, ptr {v}"), TEXT)
+                return
             cur = self.read_target(s.target)
             v = self.expr(s.expr)
             if s.kind == "text":
@@ -769,7 +835,7 @@ class Gen:
                 f.emit(f"{r} = add i64 {cur}, {v}")
             self.write_target(s.target, r, t)
         elif isinstance(s, Print):
-            vals = [(self.T(p), self.expr(p)) for p in s.parts]
+            vals = [(self.T(p), self.expr(p, False)) for p in s.parts]
             for t, v in vals:
                 self.out_value("out", v, t)
             self.call("void", "pl_out_print")
@@ -838,7 +904,7 @@ class Gen:
             f.start(body)
             pos = f.t()
             f.emit(f"{pos} = add i64 {i}, 1")
-            v = self.from_slot(self.call("i64", "pl_list_get", f"ptr {items}, i64 {pos}"), vt)
+            v = self.from_slot(self.item_at(items, i), vt)   # i is below the length, checked above
             self.write_target(s.var, v, vt)
             self.loop(step, done, s.body)
             f.start(step)
@@ -853,17 +919,13 @@ class Gen:
             ctr = f.t().replace("%t", "%count")
             f.alloca(ctr, "i64")
             f.emit(f"store i64 {a}, ptr {ctr}")
-            up, stepv = f.t(), f.t()
-            f.emit(f"{up} = icmp sle i64 {a}, {b}")
-            f.emit(f"{stepv} = select i1 {up}, i64 1, i64 -1")
+            stepv = -1 if s.down else 1
             cond, body, step, done = f.label("count.cond"), f.label("count.body"), f.label("count.next"), \
                 f.label("count.end")
             f.start(cond)
-            i, c1, c2, c = f.t(), f.t(), f.t(), f.t()
+            i, c = f.t(), f.t()
             f.emit(f"{i} = load i64, ptr {ctr}")
-            f.emit(f"{c1} = icmp sle i64 {i}, {b}")
-            f.emit(f"{c2} = icmp sge i64 {i}, {b}")
-            f.emit(f"{c} = select i1 {up}, i1 {c1}, i1 {c2}")
+            f.emit(f"{c} = icmp {'sge' if s.down else 'sle'} i64 {i}, {b}")
             f.term(f"br i1 {c}, label %{body}, label %{done}")
             f.start(body)
             self.write_target(s.var, i, INT)
@@ -1011,7 +1073,10 @@ class Gen:
             f.emit(f"call void @pl_register_kinds(ptr @pl.kinds, i32 {len(rows)})")
         f.emit(f"store ptr {self.string(os.path.basename(self.file))}, ptr @pl_file")
         for name, _, t in self.globals_:
-            f.emit(f"store {llt(t)} {self.zero(t)}, ptr @g.{san(name)}")
+            where = f"%m.{san(name)}" if name in self.main_locals else f"@g.{san(name)}"
+            if name in self.main_locals:
+                f.alloca(where, llt(t))
+            f.emit(f"store {llt(t)} {self.zero(t)}, ptr {where}")
         self.block([s for s in self.prog if not isinstance(s, (Handler, FuncDef))])
         handlers = [s for s in self.prog if isinstance(s, Handler)]
         if handlers:
@@ -1058,6 +1123,8 @@ class Gen:
         main = self.main()
         out = ["; generated by engc from Plain source; link with runtime/*.c and -lgc", ""]
         for name, _, t in self.globals_:
+            if name in self.main_locals:
+                continue
             init = {"Int": "0", "Float": "0.0", "Bool": "false"}.get(t.name, "null")
             out.append(f"@g.{san(name)} = internal global {llt(t)} {init}")
         for s, g in self.strings.items():
@@ -1065,8 +1132,28 @@ class Gen:
             enc = "".join(chr(b) if 32 <= b < 127 and chr(b) not in '"\\' else f"\\{b:02X}" for b in data)
             out.append(f'{g} = private unnamed_addr constant [{len(data)} x i8] c"{enc}"')
         out += self.extra
-        out += ["", DECLS, ""] + fns + [main, ""]
+        out += ["", DECLS, ""] + fns + [main, "", "!0 = !{!\"branch_weights\", i32 2000, i32 1}", ""]
         return "\n".join(out)
+
+
+def var_names(x, seen=None):
+    """Names of the variables used anywhere inside a node or a list of them."""
+    seen = set() if seen is None else seen
+    out = set()
+    if isinstance(x, list):
+        for y in x:
+            out |= var_names(y, seen)
+        return out
+    if not dataclasses.is_dataclass(x) or isinstance(x, type) or id(x) in seen or type(x).__name__ in ("FuncSig", "KindInfo"):
+        return out
+    seen.add(id(x))
+    if isinstance(x, Var):
+        out.add(x.name)
+    if isinstance(x, FuncDef):
+        out |= var_names(x.sig.body, seen)
+    for fl in dataclasses.fields(x):
+        out |= var_names(getattr(x, fl.name), seen)
+    return out
 
 
 def walk_all(prog):
@@ -1114,5 +1201,5 @@ def build(prog, funcs, types, file, output):
             f.write(ir)
         net = "call ptr @pl_fetch(" in ir or "call ptr @pl_post(" in ir
         libs = ["-lgc", "-lm"] + (["-lcurl"] if bot or net else [])
-        subprocess.run(["clang", "-O2", *LTO, "-Wno-override-module", ll] + runtime_objects(bot, net) +
+        subprocess.run(["clang", "-O3", *LTO, "-Wno-override-module", ll] + runtime_objects(bot, net) +
                        ["-o", output] + libs, check=True)

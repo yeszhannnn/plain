@@ -583,7 +583,7 @@ class Interpreter:
                 pass
         elif isinstance(s, ForRange):
             a, b = self.ev(s.start), self.ev(s.end)
-            step = 1 if a <= b else -1
+            step = -1 if s.down else 1
             try:
                 for v in range(a, b + step, step):
                     self.store(s.var, v)

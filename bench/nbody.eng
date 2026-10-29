@@ -1,0 +1,82 @@
+Note: the n-body simulation of the outer planets, as in the Computer Language Benchmarks Game.
+
+a body has an x, a y, a z, a vx, a vy, a vz and a mass (decimal).
+set sunmass to 4 times pi times pi.
+set days to 365.24.
+
+set bodies to an empty list.
+add a new body with mass sunmass to bodies.
+add a new body with x 4.84143144246472090, y -1.16032004402742839, z -0.103622044471123109,
+  vx 0.00166007664274403694 times days, vy 0.00769901118419740425 times days,
+  vz -0.0000690460016972063023 times days and mass 0.000954791938424326609 times sunmass to bodies.
+add a new body with x 8.34336671824457987, y 4.12479856412430479, z -0.403523417114321381,
+  vx -0.00276742510726862411 times days, vy 0.00499852801234917238 times days,
+  vz 0.0000230417297573763929 times days and mass 0.000285885980666130812 times sunmass to bodies.
+add a new body with x 12.8943695621391310, y -15.1111514016986312, z -0.223307578892655734,
+  vx 0.00296460137564761618 times days, vy 0.00237847173959480950 times days,
+  vz -0.0000296589568540237556 times days and mass 0.0000436624404335156298 times sunmass to bodies.
+add a new body with x 15.3796971148509165, y -25.9193146099879641, z 0.179258772950371181,
+  vx 0.00268067772490389322 times days, vy 0.00162824170038242295 times days,
+  vz -0.0000951592254519715870 times days and mass 0.0000515138902046611451 times sunmass to bodies.
+
+to find the energy of some bodies
+  set e to 0.0.
+  set n to the number of items in the bodies.
+  for every i from 1 to n
+    set b to item i of the bodies.
+    add 0.5 times the mass of b times (the vx of b squared plus the vy of b squared plus the vz of b squared) to e.
+    for every j from i plus 1 to n
+      set c to item j of the bodies.
+      set dx to the x of b minus the x of c.
+      set dy to the y of b minus the y of c.
+      set dz to the z of b minus the z of c.
+      subtract the mass of b times the mass of c divided by the square root of (dx squared plus dy squared plus dz squared) from e.
+    that's all.
+  that's all.
+  give back e.
+that's all.
+
+to advance some bodies by some dt
+  set n to the number of items in the bodies.
+  for every i from 1 to n
+    set b to item i of the bodies.
+    for every j from i plus 1 to n
+      set c to item j of the bodies.
+      set dx to the x of b minus the x of c.
+      set dy to the y of b minus the y of c.
+      set dz to the z of b minus the z of c.
+      set d2 to dx squared plus dy squared plus dz squared.
+      set mag to dt divided by (d2 times the square root of d2).
+      set mb to the mass of b times mag.
+      set mc to the mass of c times mag.
+      subtract dx times mc from the vx of b.
+      subtract dy times mc from the vy of b.
+      subtract dz times mc from the vz of b.
+      add dx times mb to the vx of c.
+      add dy times mb to the vy of c.
+      add dz times mb to the vz of c.
+    that's all.
+  that's all.
+  for every b in the bodies
+    add dt times the vx of b to the x of b.
+    add dt times the vy of b to the y of b.
+    add dt times the vz of b to the z of b.
+  that's all.
+that's all.
+
+set px to 0.0.
+set py to 0.0.
+set pz to 0.0.
+for every b in bodies
+  add the vx of b times the mass of b to px.
+  add the vy of b times the mass of b to py.
+  add the vz of b times the mass of b to pz.
+that's all.
+set sun to item 1 of bodies.
+set the vx of sun to 0.0 minus (px divided by sunmass).
+set the vy of sun to 0.0 minus (py divided by sunmass).
+set the vz of sun to 0.0 minus (pz divided by sunmass).
+
+say the energy of bodies with 9 decimals.
+repeat 5000000 times, advance bodies by 0.01.
+say the energy of bodies with 9 decimals.

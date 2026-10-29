@@ -1,0 +1,5 @@
+Note: builds one long text out of a million numbers.
+
+set built to "".
+for every n from 1 to 1000000, add n as text to built.
+say the length of built.

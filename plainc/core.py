@@ -277,7 +277,10 @@ class ForRange:
     start: object
     end: object
     body: list = field(default_factory=list)
-    def dump(self, ind): return [f"{ind}ForRange({self.var}, {self.start}, {self.end})"] + dump_body(self.body, ind)
+    down: bool = False     # counts down: "from 10 to 1" with written numbers, or "from n down to 1"
+    def dump(self, ind):
+        return [f"{ind}ForRange({self.var}, {self.start}, {self.end}{', down' if self.down else ''})"] + \
+            dump_body(self.body, ind)
 
 @dataclass(eq=False)
 class If:

@@ -503,6 +503,9 @@ class Parser:
                         if all(len(p) == 1 for p in parsed):
                             res.append((ListLit([p[0] for p in parsed]), j + 1))
                     res += [(e, j + 1) for e in self.whole_values(inner)]
+                    if any(t.kind == "CONCAT" for t in inner):    # ("w" and then n)
+                        res += [(Concat(parts), j + 1) for parts, m in self.print_args(inner, 0)
+                                if m == len(inner) and len(parts) > 1]
                     return res
             self.err("A bracket is opened but never closed.")
         if k != "WORD":
@@ -708,9 +711,13 @@ class Parser:
                 op = ops[k]
                 right_assoc = op[1] == 3
                 for l, lt in build(i, k):
+                    if isinstance(l, New):    # a new thing is never a number: "with mass 2 times m" binds inside
+                        continue
                     if lt and constrained(lt, op) and (lt[0] <= op[1] if right_assoc else lt[0] < op[1]):
                         continue
                     for r, rt in build(k + 1, j):
+                        if isinstance(r, New):
+                            continue
                         if rt and constrained(rt, op) and (rt[0] < op[1] if right_assoc else rt[0] <= op[1]):
                             continue
                         res.append((Bin(op[0], l, r), (op[1], op[2])))
@@ -1031,9 +1038,11 @@ class Parser:
             to = top_positions(head, ("TO",))
             if not to:
                 self.err('Write it like: for every n from 1 to 10.')
-            start = self.one_expr(head[3:to[0]], "where to start")
+            said_down = is_word(head[to[0] - 1], "down")
+            start = self.one_expr(head[3:to[0] - said_down], "where to start")
             end = self.one_expr(head[to[0] + 1:], "where to stop")
-            node = ForRange(None, start, end)
+            written = isinstance(start, Num) and isinstance(end, Num) and start.value > end.value
+            node = ForRange(None, start, end, down=said_down or written)
         else:
             self.err('Write it like: for every guest in the guests, or: for every n from 1 to 10.')
         node.var = self.define(head[1])
@@ -1148,6 +1157,10 @@ class Parser:
                           if j == n]
         if calls:
             return self.at(self.choose(calls, "this command", toks, render=english_stmt, key=stmt_key))
+        if k == "WORD" and self.funcs.commands(toks[0]):
+            forms = "; ".join(f'"{sig.display}"' for sig in self.funcs.commands(toks[0]))
+            self.err(f'This doesn\'t match the command {forms}. Words in a command\'s first line are typed '
+                     f'exactly as written; a value you pass in is introduced there with "a" or "some".')
         if k == "WORD":
             pool = self.lx.single_forms + sorted(self.funcs.first_words())
             close = difflib.get_close_matches(toks[0].value, pool, n=1, cutoff=0.7)
@@ -1191,6 +1204,9 @@ class Parser:
         cands = []
         for pos in top_positions(toks, ("TO",)):
             values = self.expr_full(toks[1:pos])
+            if any(t.kind == "CONCAT" for t in toks[1:pos]):     # add "w" and then n to words
+                values += [Concat(parts) for parts, m in self.print_args(toks[1:pos], 0)
+                           if m == pos - 1 and len(parts) > 1]
             rest = toks[pos + 1:]
             if rest and is_word(rest[0], "file"):
                 for p in self.expr_full(rest[1:]):

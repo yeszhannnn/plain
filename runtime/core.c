@@ -21,6 +21,7 @@ static char **g_argv;
 static unsigned long long rng_state;
 
 void pl_init(int argc, char **argv) {
+    GC_set_all_interior_pointers(1);   /* texts that grow in place are pointed to past their header */
     GC_INIT();
     g_argc = argc;
     g_argv = argv;

@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <gc.h>
+
 #include "plain_rt.h"
 
 /* ── UTF-8 ── */
@@ -145,6 +147,50 @@ char *pl_text_glue(const char *a, const char *b) {
     buf_puts(&out, a);
     buf_puts(&out, b);
     return buf_take(&out);
+}
+
+/* "add X to t" where t is a variable: the text grows in place, like a string builder, as long as nothing
+   else holds it. A text that is copied anywhere (another variable, a list, a call) is marked shared first
+   by pl_text_share, and the next append makes a fresh copy. Texts that grow this way carry a header. */
+typedef struct {
+    uint64_t magic;
+    int64_t len, cap, shared;
+} Growing;
+
+#define GROWING 0x506c61696e477277ull
+
+static Growing *growing(const char *s) {
+    if (!s) return NULL;
+    char *base = GC_base((void *)s);
+    if (!base || base + sizeof(Growing) != s) return NULL;
+    Growing *g = (Growing *)base;
+    return g->magic == GROWING ? g : NULL;
+}
+
+void pl_text_share(const char *s) {
+    Growing *g = growing(s);
+    if (g) g->shared = 1;
+}
+
+char *pl_text_append(const char *a, const char *b) {
+    a = nz(a), b = nz(b);
+    Growing *g = growing(a);
+    size_t nb = strlen(b);
+    if (g && !g->shared && g->len + (int64_t)nb < g->cap) {
+        memmove((char *)a + g->len, b, nb + 1);
+        g->len += nb;
+        return (char *)a;
+    }
+    size_t na = g ? (size_t)g->len : strlen(a);
+    size_t cap = (na + nb + 1) * 2;
+    if (cap < 64) cap = 64;
+    Growing *n = GC_MALLOC_ATOMIC(sizeof(Growing) + cap);
+    if (!n) pl_fail("Out of memory.");
+    n->magic = GROWING, n->len = na + nb, n->cap = cap, n->shared = 0;
+    char *d = (char *)(n + 1);
+    memcpy(d, a, na);
+    memcpy(d + na, b, nb + 1);
+    return d;
 }
 
 char *pl_replace(const char *s, const char *a, const char *b) {

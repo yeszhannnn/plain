@@ -1,0 +1,10 @@
+Note: counts words in a table: five million words drawn from a vocabulary of ten thousand.
+
+set vocabulary to an empty list.
+for every n from 1 to 10000, add "w" and then n to vocabulary.
+set seed to 1.
+for every n from 1 to 5000000
+  set seed to ((seed times 1103515245) plus 12345) mod 2147483648.
+  add 1 to the count of item ((seed mod 10000) plus 1) of vocabulary.
+that's all.
+say the number of items in the count and then the count of "w 1".

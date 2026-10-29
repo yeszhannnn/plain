@@ -1,0 +1,8 @@
+Note: Fibonacci numbers by plain recursion: measures function calls.
+
+to find the fib of a number
+  if the number is less than 2, give back the number.
+  give back the fib of (the number minus 1) plus the fib of (the number minus 2).
+that's all.
+
+say the fib of 40.

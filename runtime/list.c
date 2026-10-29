@@ -44,6 +44,12 @@ static int64_t position(List *l, int64_t i) {
 }
 
 int64_t pl_list_get(List *l, int64_t i) { return l->items[position(l, i)]; }
+
+/* the compiled code checks item numbers itself and calls this when one is out of range */
+void pl_list_bad_index(List *l, int64_t i) {
+    position(l, i);
+    pl_fail("There is no item %lld.", (long long)i);
+}
 void pl_list_set(List *l, int64_t i, int64_t v) { l->items[position(l, i)] = v; }
 
 void pl_list_remove_at(List *l, int64_t i) {

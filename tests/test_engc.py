@@ -436,6 +436,73 @@ class Web(unittest.TestCase):
         self.assertEqual(native(text), (expected, "", 0))
 
 
+TEXT_GROWTH = """set first to "x".
+add "y" to first.
+set b to first.
+add "z" to first.
+say first and then b.
+set items to an empty list.
+set s to "".
+for every n from 1 to 3
+  add n as text to s.
+  add s to items.
+that's all.
+say items.
+to mention some words, say the words.
+add "!" to s.
+mention s.
+add "?" to s.
+mention s.
+add s to s.
+say s.
+set t to a new list.
+set w to "q".
+for every n from 1 to 3
+  add "w" to w.
+  add w to t.
+  set item 1 of t to w.
+that's all.
+say t.
+set total to "".
+to grow by some piece
+  add the piece to total.
+that's all.
+grow by "a".
+set saved to total.
+grow by "b".
+say total and then saved.
+if w is "qwww", say "same".
+say the length of w.
+"""
+
+
+class Speed(unittest.TestCase):
+    """Rules the faster native code must keep."""
+
+    def test_text_grows_in_place_without_changing_copies(self):
+        expected = "xyz xy\n1, 12 and 123\n123!\n123!?\n123!?123!?\nqwww, qww and qwww\nab a\nsame\n4\n"
+        self.assertEqual(run_text(TEXT_GROWTH), expected)
+        self.assertEqual(native(TEXT_GROWTH)[0], expected)
+
+    def test_counting_direction(self):
+        text = ("set n to 3.\nfor every i from n plus 1 to n, say i.\nfor every i from 3 to 1, say i.\n"
+                "for every i from n down to 2, say i.\nset xs to 1, 2 and 3.\n"
+                "for every i from 1 to 3\n  for every j from i plus 1 to 3, say item i of xs and then item j of xs.\n"
+                "that's all.\n")
+        expected = "3\n2\n1\n3\n2\n1 2\n1 3\n2 3\n"
+        self.assertEqual(run_text(text), expected)
+        self.assertEqual(native(text)[0], expected)
+
+    def test_joined_values_in_brackets_and_add(self):
+        text = 'set v to an empty list.\nadd ("w" and then 5) to v.\nadd "q" and then 6 to v.\nsay v.\n'
+        self.assertEqual(run_text(text), "w 5 and q 6\n")
+
+    def test_item_out_of_range_in_native_code(self):
+        a, b = interpreted("set xs to 1 and 2.\nset item 3 of xs to 1.\n"), native("set xs to 1 and 2.\nset item 3 of xs to 1.\n")
+        self.assertEqual(a, b)
+        self.assertEqual(a[1], "prog.eng, line 2:\nThere is no item 3: the list has 2 items.\n")
+
+
 class Bots(unittest.TestCase):
     BACKENDS = ("interpreter", "native")
 

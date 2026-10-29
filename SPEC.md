@@ -230,7 +230,9 @@ for every guest in the guests, say "Welcome," and then the guest.
 for every letter in "кот", say letter.
 for every drink in the price, say drink.          ключи таблицы, в порядке добавления
 for every n from 1 to 10, say n squared.
-for every n from 10 to 1, say n.                  обратный счёт
+for every n from 10 to 1, say n.                  обратный счёт: обе границы записаны числами
+for every n from count down to 1, say n.          обратный счёт с вычисляемой границей
+for every j from i plus 1 to n, say j.            при i = n не выполнится ни разу
 
 as long as n is more than 1, halve n.
 do the following until n is 0. … that's all.
@@ -238,6 +240,7 @@ keep doubling n until it is bigger than 100.      одно простое дей
 ```
 
 - Количество повторений и границы счёта вычисляются один раз перед началом.
+- Счёт идёт вниз, только если обе границы записаны числами и первая больше (`from 10 to 1`) или если написано `down to`. В остальных случаях счёт идёт вверх, и цикл пустой, когда начало больше конца. Направление известно при компиляции.
 - `for every … in` проходит список так, как он выглядит в момент каждого шага: добавленные во время цикла элементы тоже будут пройдены. Таблица и текст проходятся по снимку, сделанному перед началом.
 - `stop the loop` (также `stop repeating`, `leave the loop`) выходит из ближайшего цикла.
 - `skip to the next one` (также `skip this one`, `go to the next one`) переходит к следующему шагу.
