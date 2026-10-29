@@ -1,6 +1,7 @@
 import glob
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -501,6 +502,89 @@ class Speed(unittest.TestCase):
         a, b = interpreted("set xs to 1 and 2.\nset item 3 of xs to 1.\n"), native("set xs to 1 and 2.\nset item 3 of xs to 1.\n")
         self.assertEqual(a, b)
         self.assertEqual(a[1], "prog.eng, line 2:\nThere is no item 3: the list has 2 items.\n")
+
+
+PLAIN_RS = os.path.join(ROOT, "compiler-rs", "target", "release", "plain")
+
+BAD_PROGRAMS = [
+    'set x to 1, "two" and 3.\n',
+    "stop the loop.\n",
+    'a book has a title.\nset b to a new book with title "x".\nset the title of b to 5.\n',
+    "a book has a title (colour).\n",
+    "say 1 plus 2 times 3.\n",
+    "pritn 5.\n",
+    "set x to 5.\nset x to \"five\".\n",
+    "say it.\n",
+    "to greet someone, say \"hi\" and then someone.\ngreet.\n",
+    "to find the area of a width and a height, say 1.\n",
+    "if x is more than, say 1.\n",
+    "say \"unclosed.\n",
+    "say 5 @ 3.\n",
+    "that's all.\n",
+    "otherwise say 1.\n",
+    'reply "hi".\n',
+    "set t to an empty table.\nsay the length of 5.\n",
+    "set l to 1 and 2.\nsort l by.\n",
+    "give back 5.\n",
+    'use "nowhere.eng".\n',
+]
+
+
+@unittest.skipUnless(shutil.which("cargo"), "the Rust compiler needs cargo")
+class RustCompiler(unittest.TestCase):
+    """compiler-rs (the plain command) gives the same Core IR, LLVM IR, errors and programs as plainc."""
+
+    @classmethod
+    def setUpClass(cls):
+        subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=os.path.join(ROOT, "compiler-rs"), check=True)
+
+    def both(self, cmd, path, cwd):
+        a = subprocess.run([sys.executable, os.path.join(ROOT, "engc.py"), cmd, path], capture_output=True, text=True, cwd=cwd)
+        b = subprocess.run([PLAIN_RS, cmd, path], capture_output=True, text=True, cwd=cwd)
+        return (a.stdout, a.stderr, a.returncode), (b.stdout, b.stderr, b.returncode)
+
+    def test_same_core_and_ir(self):
+        paths = sorted(glob.glob(os.path.join(EX, "**", "*.eng"), recursive=True) +
+                       glob.glob(os.path.join(ROOT, "bench", "*.eng")))
+        self.assertGreater(len(paths), 30)
+        for path in paths:
+            for cmd in ("core", "ir"):
+                with self.subTest(program=os.path.relpath(path, ROOT), cmd=cmd):
+                    a, b = self.both(cmd, os.path.basename(path), os.path.dirname(path))
+                    self.assertEqual(a, b)
+
+    def test_same_errors(self):
+        for k, text in enumerate(BAD_PROGRAMS):
+            path = os.path.join(BUILD, f"bad{k}.eng")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            with self.subTest(program=text):
+                a, b = self.both("core", path, BUILD)
+                self.assertEqual(a, b)
+                self.assertEqual(b[2], 1)
+
+    def test_examples_run(self):
+        for expected_path in sorted(glob.glob(os.path.join(EX, "*.expected")) + glob.glob(os.path.join(EX, "*", "*.expected"))):
+            program = expected_path[:-len(".expected")] + ".eng"
+            folder = os.path.dirname(program)
+            inp_path = expected_path[:-len(".expected")] + ".input"
+            inp = open(inp_path).read() if os.path.exists(inp_path) else ""
+            with open(expected_path, encoding="utf-8") as f:
+                expected = f.read()
+            with self.subTest(program=os.path.relpath(program, EX)):
+                exe = os.path.join(BUILD, "rs-" + os.path.basename(program)[:-4])
+                subprocess.run([PLAIN_RS, "build", program, "-o", exe], check=True, capture_output=True)
+                p = subprocess.run([exe], input=inp, capture_output=True, text=True, cwd=folder)
+                self.assertEqual(p.stdout, expected)
+
+    def test_run_and_check(self):
+        path = os.path.join(BUILD, "args.eng")
+        with open(path, "w") as f:
+            f.write('say "got" and then the number of items in the arguments.\nfail with "stop".\n')
+        p = subprocess.run([PLAIN_RS, "run", path, "a", "b"], capture_output=True, text=True)
+        self.assertEqual((p.stdout, p.stderr, p.returncode), ("got 2\n", "args.eng, line 2:\nstop\n", 1))
+        p = subprocess.run([PLAIN_RS, "check", path], capture_output=True, text=True)
+        self.assertEqual((p.stdout, p.returncode), ("args.eng: no problems found.\n", 0))
 
 
 class Bots(unittest.TestCase):

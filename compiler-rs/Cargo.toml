@@ -1,0 +1,16 @@
+[package]
+name = "plain"
+version = "0.1.0"
+edition = "2021"
+description = "Compiler for Plain, a programming language written as plain English"
+
+[[bin]]
+name = "plain"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = "2"
+
+[profile.release]
+opt-level = 3

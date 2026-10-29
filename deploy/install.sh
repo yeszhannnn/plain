@@ -8,7 +8,14 @@ if [ "$(id -u)" != 0 ] || [ -z "$1" ]; then
 fi
 here=$(cd "$(dirname "$0")/.." && pwd)
 apt-get install -y clang lld libcurl4-openssl-dev libgc-dev python3
-python3 "$here/engc.py" build "$1" -o /tmp/plain-bot
+if command -v plain >/dev/null 2>&1; then
+    plain build "$1" -o /tmp/plain-bot
+elif command -v cargo >/dev/null 2>&1; then
+    cargo install --quiet --path "$here/compiler-rs" --root /usr/local
+    plain build "$1" -o /tmp/plain-bot
+else
+    python3 "$here/engc.py" build "$1" -o /tmp/plain-bot
+fi
 id plain >/dev/null 2>&1 || useradd --system --home-dir /opt/plain-bot --shell /usr/sbin/nologin plain
 mkdir -p /opt/plain-bot
 install -m 755 /tmp/plain-bot /opt/plain-bot/bot

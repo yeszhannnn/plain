@@ -550,6 +550,8 @@ class Parser:
             if not res:
                 self.err(f'I don\'t know "{t.text}" yet. Set it first, for example: set {t.text} to 0.')
             return res
+        if any(isinstance(e, Call) for e, _ in res):
+            return res
         return res + [(Text(t.text), i + 1)]   # an unknown single word is just text
 
     def may_be_table(self, name):

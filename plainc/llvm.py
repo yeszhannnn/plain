@@ -1140,7 +1140,7 @@ def var_names(x, seen=None):
     """Names of the variables used anywhere inside a node or a list of them."""
     seen = set() if seen is None else seen
     out = set()
-    if isinstance(x, list):
+    if isinstance(x, (list, tuple)):
         for y in x:
             out |= var_names(y, seen)
         return out
