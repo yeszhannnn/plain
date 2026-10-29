@@ -236,7 +236,7 @@ int pl_slot_compare(int64_t a, int64_t b, char kind) {
 int64_t pl_zero_slot(const char *desc) {
     switch (*desc) {
     case 's': return (int64_t)(intptr_t)pl_strdup("");
-    case 'L': return (int64_t)(intptr_t)pl_list_new();
+    case 'L': return (int64_t)(intptr_t)pl_list_of(desc + 1);
     case 'M': return (int64_t)(intptr_t)pl_map_new(desc[1] == 's');
     default: return 0; /* 0, 0.0 and false are all zero bits */
     }

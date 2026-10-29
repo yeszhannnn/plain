@@ -8,6 +8,14 @@ List *pl_list_new(void) {
     List *l = pl_alloc(sizeof *l);
     l->len = l->cap = 0;
     l->items = NULL;
+    l->plain = 0;
+    return l;
+}
+
+/* a new list; lists of numbers or yes/no values live in memory the GC does not scan */
+List *pl_list_of(const char *item_desc) {
+    List *l = pl_list_new();
+    l->plain = *item_desc == 'i' || *item_desc == 'f' || *item_desc == 'b';
     return l;
 }
 
@@ -16,7 +24,7 @@ int64_t pl_list_len(List *l) { return l ? l->len : 0; }
 void pl_list_add(List *l, int64_t v) {
     if (l->len == l->cap) {
         int64_t cap = l->cap ? l->cap * 2 : 8;
-        int64_t *items = pl_alloc(cap * sizeof *items);
+        int64_t *items = l->plain ? (int64_t *)pl_alloc_text(cap * sizeof *items) : pl_alloc(cap * sizeof *items);
         if (l->items) memcpy(items, l->items, l->len * sizeof *items);
         l->items = items;
         l->cap = cap;
@@ -81,7 +89,7 @@ static void merge_sort(int64_t *a, int64_t *tmp, int64_t n, char kind) {
 
 void pl_list_sort(List *l, const char *desc) {
     if (l->len < 2) return;
-    int64_t *tmp = pl_alloc(l->len * sizeof *tmp);
+    int64_t *tmp = l->plain ? (int64_t *)pl_alloc_text(l->len * sizeof *tmp) : pl_alloc(l->len * sizeof *tmp);
     merge_sort(l->items, tmp, l->len, *desc);
 }
 
@@ -95,6 +103,7 @@ void pl_list_reverse(List *l) {
 
 List *pl_list_slice(List *l, int64_t a, int64_t b) {
     List *out = pl_list_new();
+    out->plain = l->plain;
     if (a < 1) a = 1;
     if (b > l->len) b = l->len;
     for (int64_t i = a; i <= b; i++) pl_list_add(out, l->items[i - 1]);

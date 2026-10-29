@@ -153,7 +153,7 @@ static int64_t load_value(J *j, const char *d) {
     case 's': return (int64_t)(intptr_t)pl_strdup(j && j->type == J_STR ? j->s : "");
     case 'b': return j && j->type == J_BOOL ? j->i : 0;
     case 'L': {
-        List *l = pl_list_new();
+        List *l = pl_list_of(d + 1);
         for (int k = 0; j && j->type == J_ARR && k < j->len; k++) pl_list_add(l, load_value(j->items[k], d + 1));
         return (int64_t)(intptr_t)l;
     }

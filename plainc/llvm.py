@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -10,7 +11,7 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english, is_bot)
+                   english, is_bot, walk_stmts)
 from .errors import EngError
 from .types import BOOL, FLOAT, INT, TEXT, desc
 
@@ -75,6 +76,7 @@ declare ptr @pl_lines(ptr)
 declare ptr @pl_letters(ptr)
 declare ptr @pl_join(ptr, ptr, ptr)
 declare ptr @pl_list_new()
+declare ptr @pl_list_of(ptr)
 declare i64 @pl_list_len(ptr)
 declare i64 @pl_list_get(ptr, i64)
 declare void @pl_list_set(ptr, i64, i64)
@@ -180,6 +182,8 @@ class Gen:
         self.user_types = {name: t for name, _, t in types.variables("user")}
         self.globals_ = types.variables("global")
         self.extra = []
+        files = {os.path.basename(getattr(s, "file", "") or file) for s in walk_all(prog)}
+        self.one_file = len(files) <= 1     # then the file name is set once, at start-up
 
     # ── helpers ──
 
@@ -246,7 +250,7 @@ class Gen:
         if t.name == "Text":
             return self.string("")
         if t.name == "List":
-            return self.call("ptr", "pl_list_new")
+            return self.call("ptr", "pl_list_of", f"ptr {self.desc(t.args[0])}")
         return self.call("ptr", "pl_map_new", f"i32 {1 if t.args[0].name == 'Text' else 0}")
 
     def desc(self, t):
@@ -308,7 +312,7 @@ class Gen:
             return self.call("ptr", "pl_cat_end")
         if isinstance(e, ListLit):
             el = t.args[0]
-            lst = self.call("ptr", "pl_list_new")
+            lst = self.call("ptr", "pl_list_of", f"ptr {self.desc(el)}")
             for x in e.items:
                 v = self.to_slot(self.conv(self.expr(x), self.T(x), el), el)
                 self.call("void", "pl_list_add", f"ptr {lst}, i64 {v}")
@@ -553,7 +557,8 @@ class Gen:
             line = getattr(s, "line", 0)
             if line:
                 self.f.emit(f"store i32 {line}, ptr @pl_line")
-                self.f.emit(f"store ptr {self.string(os.path.basename(s.file or self.file))}, ptr @pl_file")
+                if not self.one_file:
+                    self.f.emit(f"store ptr {self.string(os.path.basename(s.file or self.file))}, ptr @pl_file")
             self.stmt(s)
 
     def loop(self, cont, brk, body):
@@ -777,6 +782,7 @@ class Gen:
         f = self.f = Fn(self, "define i32 @main(i32 %argc, ptr %argv)")
         self.sig = None
         f.emit("call void @pl_init(i32 %argc, ptr %argv)")
+        f.emit(f"store ptr {self.string(os.path.basename(self.file))}, ptr @pl_file")
         for name, _, t in self.globals_:
             f.emit(f"store {llt(t)} {self.zero(t)}, ptr @g.{san(name)}")
         self.block([s for s in self.prog if not isinstance(s, (Handler, FuncDef))])
@@ -836,8 +842,17 @@ class Gen:
         return "\n".join(out)
 
 
+def walk_all(prog):
+    for s in walk_stmts(prog):
+        yield s
+
+
 def emit(prog, funcs, types, file=""):
     return Gen(prog, funcs, types, file).module()
+
+
+# Link-time optimisation lets LLVM inline the runtime (list access, arithmetic helpers) into the program.
+LTO = ["-flto", "-fuse-ld=lld"] if shutil.which("ld.lld") else []
 
 
 def runtime_objects(bot):
@@ -848,6 +863,7 @@ def runtime_objects(bot):
         if name.endswith((".c", ".h")):
             with open(os.path.join(RUNTIME_DIR, name), "rb") as f:
                 h.update(name.encode() + f.read())
+    h.update(" ".join(LTO).encode())
     cache = os.path.join(tempfile.gettempdir(), f"plain-runtime-{h.hexdigest()[:16]}")
     os.makedirs(cache, exist_ok=True)
     objs = []
@@ -855,8 +871,8 @@ def runtime_objects(bot):
         obj = os.path.join(cache, name[:-2] + ".o")
         if not os.path.exists(obj):
             tmp = obj + f".{os.getpid()}.tmp"
-            subprocess.run(["clang", "-O2", "-c", "-DPLAIN_TELEGRAM", os.path.join(RUNTIME_DIR, name), "-o", tmp],
-                           check=True)
+            subprocess.run(["clang", "-O2", *LTO[:1], "-c", "-DPLAIN_TELEGRAM", os.path.join(RUNTIME_DIR, name),
+                            "-o", tmp], check=True)
             os.replace(tmp, obj)
         objs.append(obj)
     return objs
@@ -870,5 +886,5 @@ def build(prog, funcs, types, file, output):
         with open(ll, "w", encoding="utf-8") as f:
             f.write(ir)
         libs = ["-lgc", "-lm"] + (["-lcurl"] if bot else [])
-        subprocess.run(["clang", "-O2", "-Wno-override-module", ll] + runtime_objects(bot) + ["-o", output] + libs,
-                       check=True)
+        subprocess.run(["clang", "-O2", *LTO, "-Wno-override-module", ll] + runtime_objects(bot) +
+                       ["-o", output] + libs, check=True)

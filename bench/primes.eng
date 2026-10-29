@@ -1,0 +1,18 @@
+Note: counts the primes up to five million with the sieve of Eratosthenes.
+
+set limit to 5000000.
+set crossed to an empty list.
+for every n from 1 to limit, add 0 to crossed.
+
+set count to 0.
+for every n from 2 to limit
+  if item n of crossed is 0
+    add 1 to count.
+    set multiple to n times n.
+    as long as multiple is at most limit
+      set item multiple of crossed to 1.
+      add n to multiple.
+    that's all.
+  that's all.
+that's all.
+say count.

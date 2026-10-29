@@ -19,6 +19,7 @@ typedef struct {
 typedef struct {
     int64_t len, cap;
     int64_t *items;
+    int plain;      /* items are numbers or yes/no: the GC does not need to look inside */
 } List;
 
 typedef struct Map Map;
@@ -49,6 +50,7 @@ int pl_match_int(const char *s, int64_t *out);
 int pl_match_decimal(const char *s, double *out);
 
 List *pl_list_new(void);
+List *pl_list_of(const char *item_desc);
 int64_t pl_list_len(List *l);
 int64_t pl_list_get(List *l, int64_t i);
 void pl_list_add(List *l, int64_t v);
