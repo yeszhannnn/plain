@@ -1,0 +1,26 @@
+Note: catching problems instead of stopping the program.
+
+to find the checked age of a number
+  if the number is less than 0, fail with "An age can't be negative, but I got" and then the number and then ".".
+  give back the number.
+that's all.
+
+for every age in (34, -3 and 7)
+  try the following.
+    say "Age:" and then the checked age of age.
+  if something goes wrong
+    say "Skipped." and then the error.
+  that's all.
+that's all.
+
+try to read the file "settings.txt" into settings, and if that fails, set settings to "nothing saved yet".
+say "Settings:" and then settings.
+
+set numbers to 10, 0 and 5.
+for every n in numbers
+  try the following.
+    say "100 divided by" and then n and then "is" and then 100 / n.
+  if something goes wrong
+    say "100 divided by" and then n and then "does not work:" and then the error.
+  that's all.
+that's all.

@@ -154,6 +154,30 @@ class Nothing:
     def __str__(self): return "Nothing"
 
 @dataclass(eq=False)
+class ErrorText:
+    def __str__(self): return "Error"
+
+@dataclass(eq=False)
+class Comprehension:
+    """every book in the books where ...  /  the title of book for every book in the books"""
+    var: object
+    items: object
+    expr: object = None       # None keeps the items themselves
+    cond: object = None
+    def __str__(self):
+        return (f"Each({self.var}, {self.items}" + (f", {self.expr}" if self.expr is not None else "") +
+                (f", where {self.cond}" if self.cond is not None else "") + ")")
+
+@dataclass(eq=False)
+class BestBy:
+    """the book in the books with the largest year"""
+    var: object
+    items: object
+    key: object
+    largest: bool = True
+    def __str__(self): return f"{'Largest' if self.largest else 'Smallest'}By({self.var}, {self.items}, {self.key})"
+
+@dataclass(eq=False)
 class Msg:
     def __str__(self): return "Message"
 
@@ -291,7 +315,27 @@ class DeleteFile:
 @dataclass(eq=False)
 class Sort:
     items: object
-    def dump(self, ind): return [f"{ind}Sort({self.items})"]
+    var: object = None        # with a key: the name each item gets while its key is worked out
+    key: object = None
+    descending: bool = False
+    def dump(self, ind):
+        key = f", by {self.key}" if self.key is not None else ""
+        return [f"{ind}Sort({self.items}{key}{', descending' if self.descending else ''})"]
+
+@dataclass(eq=False)
+class Try:
+    body: list = field(default_factory=list)
+    handler: list = None      # what to do if something goes wrong; None ignores the error
+    def dump(self, ind):
+        lines = [f"{ind}Try"] + dump_body(self.body, ind)
+        if self.handler is not None:
+            lines += [f"{ind}OnError"] + dump_body(self.handler, ind)
+        return lines
+
+@dataclass(eq=False)
+class Fail:
+    parts: list
+    def dump(self, ind): return [f"{ind}Fail({_args(self.parts)})"]
 
 @dataclass(eq=False)
 class Reverse:
@@ -354,6 +398,10 @@ class ElseMark:
     stmt: object = None       # inline statement, or None when a block follows
 
 @dataclass(eq=False)
+class ErrorMark:
+    stmt: object = None       # "if something goes wrong", inline or with a block
+
+@dataclass(eq=False)
 class Seq:
     stmts: list
 
@@ -370,7 +418,7 @@ def walk_stmts(body):
     """Every statement, depth first, including nested bodies."""
     for s in body:
         yield s
-        for attr in ("body", "then", "else_"):
+        for attr in ("body", "then", "else_", "handler"):
             sub = getattr(s, attr, None)
             if isinstance(sub, list):
                 yield from walk_stmts(sub)
@@ -444,6 +492,16 @@ def english(e, top=True):
         return f"a new {e.kind.display}"
     if isinstance(e, Nothing):
         return "nothing"
+    if isinstance(e, ErrorText):
+        return "the error"
+    if isinstance(e, Comprehension):
+        base = f"every {english(e.var)} in {english(e.items)}"
+        if e.expr is not None:
+            base = f"{english(e.expr)} for {base}"
+        return base + (f" where {english(e.cond)}" if e.cond is not None else "")
+    if isinstance(e, BestBy):
+        return f"the {english(e.var)} in {english(e.items)} with the {'largest' if e.largest else 'smallest'} " \
+               f"{english(e.key)}"
     return str(e)
 
 

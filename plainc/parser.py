@@ -13,7 +13,8 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    ElseMark, EmptyMap, End, Exit, ForEach, ForRange, FuncDef, FuncSig, Handler, If, Index, IsNum,
                    ListLit, Logic, Lookup, Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem,
                    RemoveAt, RemoveKey, RemoveValue, Repeat, Reply, Return, Reverse, Seq, Slice, Sort, Text, Truth,
-                   Var, While, WriteFile, english, KindInfo, New, Field, Nothing)
+                   Var, While, WriteFile, english, KindInfo, New, Field, Nothing, Try, Fail, ErrorText,
+                   ErrorMark, Comprehension, BestBy)
 from .errors import AmbiguityError, EngError
 from .syntax import USER, Lexicon, Tok, apply_lexicon, canonical, normalize, show, split_sentences, tokenize
 
@@ -377,6 +378,8 @@ class Parser:
             return [(EmptyMap(), i + 1)]
         if k == "NOTHING":
             return [(Nothing(), i + 1)]
+        if k == "ERROR":
+            return [(ErrorText(), i + 1)]
         if k == "LISTOF":
             items, j = self.item_list(toks, i + 1)
             return [(ListLit(items), j)] if items else []
@@ -420,6 +423,7 @@ class Parser:
                         parsed = [unique(self.expr_full(it)) for it in items]
                         if all(len(p) == 1 for p in parsed):
                             res.append((ListLit([p[0] for p in parsed]), j + 1))
+                    res += [(e, j + 1) for e in self.whole_values(inner)]
                     return res
             self.err("A bracket is opened but never closed.")
         if k != "WORD":
@@ -721,11 +725,58 @@ class Parser:
             res.append(([e], j))
             if j < len(toks) and toks[j].kind == "CONCAT":
                 res += [([e] + more, k) for more, k in self.print_args(toks, j + 1)]
+                # the last part may be a whole phrase: ... and then the title of b for every b in books
+                res += [([e, w], len(toks)) for w in self.whole_values(toks[j + 1:])]
         return res
+
+    BEST = {"largest": True, "highest": True, "biggest": True, "most": True,
+            "smallest": False, "lowest": False, "least": False}
+
+    def whole_values(self, toks):
+        """Expressions that take a whole phrase: every X in L where ..., E for every X in L,
+        X in L with the largest K."""
+        res = []
+        n = len(toks)
+        where = [p for p in top_positions(toks, ("WHERE",))]
+        # every book in the books where the year of book is more than 1960
+        if n > 5 and is_word(toks[0], "every", "each") and toks[1].kind == "WORD" and is_word(toks[2], "in") and where:
+            w = where[0]
+            items = self.expr_full(toks[3:w])
+            if items:
+                var = self.define(toks[1])
+                res += [Comprehension(var, it, None, c) for it in items for c in self.conds(toks[w + 1:])]
+        # the title of book for every book in the books [where ...]
+        fe = top_positions(toks, ("FOREACH",))
+        if fe and fe[0] > 0 and fe[0] + 3 < n and toks[fe[0] + 1].kind == "WORD" and is_word(toks[fe[0] + 2], "in"):
+            p = fe[0]
+            end = next((w for w in where if w > p), n)
+            items = self.expr_full(toks[p + 3:end])
+            if items:
+                var = self.define(toks[p + 1])
+                conds = self.conds(toks[end + 1:]) if end < n else [None]
+                res += [Comprehension(var, it, e, c) for it in items for e in self.expr_full(toks[:p]) for c in conds]
+        # the book in the books with the largest year
+        if n > 5 and toks[0].kind == "WORD" and is_word(toks[1], "in"):
+            for p in range(3, n - 2):
+                if is_word(toks[p], "with") and toks[p + 1].kind == "WORD" and toks[p + 1].value in self.BEST:
+                    items = self.expr_full(toks[2:p])
+                    if items:
+                        var = self.define(toks[0])
+                        res += [BestBy(var, it, k, self.BEST[toks[p + 1].value]) for it in items
+                                for k in self.key_of(var, toks[p + 2:])]
+        return res
+
+    def key_of(self, var, toks):
+        """A sort key: a field name ("by year") or an expression about the item ("by the length of each")."""
+        fields = [k for k, j in self.kinds.match_field(toks, 0) if j == len(toks)]
+        if fields:
+            return [Field(var, fields[0], " ".join(t.text for t in toks))]
+        return self.expr_full(toks)
 
     def value_cands(self, toks):
         cands = [parts[0] if len(parts) == 1 else Concat(parts)
                  for parts, j in self.print_args(toks, 0) if j == len(toks)]
+        cands += self.whole_values(toks)
         items = split_top(toks, ("COMMA", "AND"))
         if len(items) > 1 and all(items):
             parsed = [unique(self.expr_full(it)) for it in items]
@@ -798,6 +849,22 @@ class Parser:
         if k == "OTHERWISE":
             rest = strip_commas(toks[1:])
             return ElseMark(self.sentence(rest) if rest else None)
+        if k == "TRY" and len(toks) == 1:
+            return self.at(Try())
+        if k == "TRY_TO":
+            pos = next((i for i, t in enumerate(toks) if t.kind == "ON_ERROR"), None)
+            body = toks[1:pos] if pos is not None else toks[1:]
+            while body and body[-1].kind in ("COMMA", "AND"):
+                body = body[:-1]
+            handler = [self.sentence(strip_commas(toks[pos + 1:]))] if pos is not None else None
+            return self.at(Try([self.sentence(strip_commas(body))], handler))
+        if k == "ON_ERROR":
+            rest = strip_commas(toks[1:])
+            return ErrorMark(self.sentence(rest) if rest else None)
+        if k == "FAIL":
+            parts = self.choose([ps for ps, j in self.print_args(toks, 1) if j == len(toks)], "the error message",
+                                toks[1:], key=lambda ps: ", ".join(map(str, ps)))
+            return self.at(Fail(parts))
         if k in ("IF", "WHILE"):
             cut = next(iter(top_positions(toks, ("COMMA", "THEN"))), None)
             node = If if k == "IF" else While
@@ -850,7 +917,7 @@ class Parser:
         if len(head) < 4 or head[1].kind != "WORD":
             self.err('Write it like: for every guest in the guests, or: for every n from 1 to 10.')
         if is_word(head[2], "in"):
-            items = self.one_expr(head[3:], "what to go through")
+            items = self.choose(self.expr_full(head[3:]) + self.whole_values(head[3:]), "what to go through", head[3:])
             node = ForEach(None, items)
         elif head[2].kind == "FROM":
             to = top_positions(head, ("TO",))
@@ -900,9 +967,20 @@ class Parser:
             return self.numeric_update(target, "*" if k == "DOUBLE" else "/", Num(2))
         if k == "REMOVE":
             return self.remove_stmt(toks)
-        if k in ("SORT", "REVERSE"):
-            items = self.one_expr(toks[1:], "the list")
-            return self.at((Sort if k == "SORT" else Reverse)(items))
+        if k == "REVERSE":
+            return self.at(Reverse(self.one_expr(toks[1:], "the list")))
+        if k == "SORT":
+            rest, descending = toks[1:], False
+            if rest and rest[-1].kind in ("DESCENDING", "ASCENDING"):
+                descending = rest[-1].kind == "DESCENDING"
+                rest = rest[:-1]
+            by = top_positions(rest, ("BY",))
+            if not by:
+                return self.at(Sort(self.one_expr(rest, "the list"), descending=descending))
+            items = self.one_expr(rest[:by[0]], "the list")
+            each = self.define(Tok("WORD", "each", "each"))
+            key = self.choose(self.key_of(each, rest[by[0] + 1:]), "what to sort by", rest[by[0] + 1:])
+            return self.at(Sort(items, each, key, descending))
         if k == "ASK":
             pos = top_positions(toks, ("ANSWER_AS",))
             if not pos or pos[-1] != n - 2 or toks[-1].kind != "WORD":
@@ -1023,6 +1101,7 @@ class Parser:
                 for cnt, k in self.exprs(toks, j):
                     if k == n - 1 and toks[k].kind == "TIMES":
                         cands.append(self.at(Repeat(cnt, [self.at(Print(parts))])))
+        cands += [self.at(Print([w])) for w in self.whole_values(toks[1:])]
         if not cands:
             self.err(f'I couldn\'t understand what to {toks[0].value}: "{show(toks)}". '
                      'Put text with several words in quotes.')
@@ -1035,7 +1114,8 @@ class Parser:
             buttons, j = self.item_list(toks, b + 1)
             if not buttons or j != len(toks):
                 self.err('Write buttons like this: reply "Pick one" with buttons "yes", "no" and "maybe".')
-        parts = self.choose([ps for ps, j in self.print_args(toks[:b], 1) if j == b], "what to reply", toks[:b],
+        parts = self.choose([ps for ps, j in self.print_args(toks[:b], 1) if j == b] +
+                            [[w] for w in self.whole_values(toks[1:b])], "what to reply", toks[:b],
                             key=lambda ps: ", ".join(map(str, ps)),
                             render=lambda ps: "reply " + " and then ".join(english(p) for p in ps))
         return self.at(Reply(parts, buttons))
@@ -1056,12 +1136,13 @@ def is_header(node):
     """A statement whose body follows on the next lines."""
     if isinstance(node, If):
         return not node.then
-    return isinstance(node, (Repeat, While, ForEach, ForRange, Handler)) and not node.body
+    return isinstance(node, (Repeat, While, ForEach, ForRange, Handler, Try)) and not node.body
 
 
 def header_frame(node, single_line):
     body = node.then if isinstance(node, If) else node.body
-    return ["then" if isinstance(node, If) else "block", body, single_line, node]
+    kind = "then" if isinstance(node, If) else ("try" if isinstance(node, Try) else "block")
+    return [kind, body, single_line, node]
 
 
 def starts_with_word(text, *words):
@@ -1176,6 +1257,21 @@ def parse_program(src, file="", lx=None):
             else:
                 prev.else_.append(node.stmt)
                 if is_header(node.stmt):     # "otherwise, if X" with a block below
+                    stack.append(header_frame(node.stmt, item.header_colon))
+            continue
+        if isinstance(node, ErrorMark):
+            if stack and stack[-1][0] == "try":
+                pop()   # "if something goes wrong" ends the block of "try the following"
+            prev = current()[-1] if current() else None
+            if not isinstance(prev, Try) or prev.handler is not None:
+                raise EngError('"If something goes wrong" needs "try the following" right before it.',
+                               item.line, item.file)
+            prev.handler = []
+            if node.stmt is None:
+                stack.append(["handler", prev.handler, item.header_colon, prev])
+            else:
+                prev.handler.append(node.stmt)
+                if is_header(node.stmt):
                     stack.append(header_frame(node.stmt, item.header_colon))
             continue
         if isinstance(node, Persist) and stack:

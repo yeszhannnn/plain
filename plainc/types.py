@@ -14,7 +14,7 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english, New, Field, Nothing, FuncSig, clone_body)
+                   english, New, Field, Nothing, FuncSig, clone_body, Try, Fail, ErrorText, Comprehension, BestBy)
 from .errors import EngError
 
 
@@ -380,12 +380,35 @@ class Checker:
             return kind_con(e.kind)
         if isinstance(e, Field):
             return self.field(e)
+        if isinstance(e, ErrorText):
+            return TEXT
+        if isinstance(e, Comprehension):
+            el = self.each_item(e.var, e.items)
+            if e.cond is not None:
+                self.eq(self.expr(e.cond), BOOL, lambda: f'"{english(e.cond)}" is not a yes/no question.')
+            return ListT(self.expr(e.expr) if e.expr is not None else el)
+        if isinstance(e, BestBy):
+            el = self.each_item(e.var, e.items)
+            self.sortable(self.expr(e.key))
+            return el
         if isinstance(e, Nothing):
             t = self.new()
             self.when_known(t, lambda c: c.name.startswith("Kind:") or self.fail(
                 f'Only things of a kind you described (like "a book has a title") can be nothing, not {words(c)}.'))
             return t
         self.fail(f"internal: unknown expression {e}")
+
+    def each_item(self, var, items):
+        """The type of the items of a list that var goes through."""
+        el = self.new()
+        it = self.expr(items)
+        self.eq(it, ListT(el), lambda: f'I can only go through a list here, and "{english(items)}" is {words(it)}.')
+        self.eq(self.target_type(var), el, lambda: f'"{var.display}" already holds something else.')
+        return el
+
+    def sortable(self, t):
+        self.when_known(t, lambda c: c.name in NUMERIC + ("Text", "Bool") or self.fail(
+            f'I can\'t put {words(c, True)} in order. Sort by a number or a text instead, for example by a field.'))
 
     def field(self, e):
         o, r = self.expr(e.obj), self.new()
@@ -686,6 +709,15 @@ class Checker:
                                                                                      f'not a table.')
         elif isinstance(s, DeleteFile):
             self.eq(self.expr(s.path), TEXT, "A file name must be text in quotes.")
+        elif isinstance(s, Sort) and s.key is not None:
+            self.each_item(s.var, s.items)
+            self.sortable(self.expr(s.key))
+        elif isinstance(s, Try):
+            self.block(s.body)
+            self.block(s.handler or [])
+        elif isinstance(s, Fail):
+            for p in s.parts:
+                self.expr(p)
         elif isinstance(s, (Sort, Reverse)):
             el = self.new()
             items = self.expr(s.items)
@@ -868,7 +900,7 @@ class Checker:
 def walk(body):
     for s in body:
         yield s
-        for attr in ("body", "then", "else_"):
+        for attr in ("body", "then", "else_", "handler"):
             sub = getattr(s, attr, None)
             if isinstance(sub, list):
                 yield from walk(sub)

@@ -1,0 +1,28 @@
+Note: a small library: kinds, sorting by a field, filters and lists built from lists.
+
+a book has a title, an author, a year and a rating.
+
+set books to an empty list.
+add a new book with title "Dune", author "Frank Herbert", year 1965 and rating 4.5 to books.
+add a new book with title "Emma", author "Jane Austen", year 1815 and rating 4.0 to books.
+add a new book with title "Solaris", author "Stanislaw Lem", year 1961 and rating 4.2 to books.
+add a new book with title "Beloved", author "Toni Morrison", year 1987 and rating 4.4 to books.
+
+to describe a book
+  say the title of the book and then "by" and then the author of the book
+    and then "(" and then the year of the book and then "), rated" and then the rating of the book.
+that's all.
+
+say "By year:".
+sort books by year.
+for every book in books, describe book.
+
+say "Best rated:" and then the title of (the book in books with the highest rating).
+say "Oldest:" and then the title of (the book in books with the smallest year).
+
+set modern to every book in books where the year of book is more than 1950.
+say "After 1950:" and then the title of book for every book in modern.
+say "Average rating:" and then the average of (the rating of book for every book in books).
+
+sort books by the length of the title of each from highest to lowest.
+say "Longest titles first:" and then the title of book for every book in books.

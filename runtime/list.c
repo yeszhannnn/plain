@@ -87,10 +87,58 @@ static void merge_sort(int64_t *a, int64_t *tmp, int64_t n, char kind) {
     memcpy(a, tmp, n * sizeof *a);
 }
 
-void pl_list_sort(List *l, const char *desc) {
+/* stable sort of positions by their keys; descending keeps equal keys in their old order, like Python */
+static const int64_t *sort_keys;
+static char sort_kind;
+static int sort_desc;
+
+static int key_compare(int64_t a, int64_t b) {
+    int c = pl_slot_compare(sort_keys[a], sort_keys[b], sort_kind);
+    return sort_desc ? -c : c;
+}
+
+static void merge_positions(int64_t *a, int64_t *tmp, int64_t n) {
+    if (n < 2) return;
+    int64_t h = n / 2;
+    merge_positions(a, tmp, h);
+    merge_positions(a + h, tmp, n - h);
+    int64_t i = 0, j = h, k = 0;
+    while (i < h && j < n) tmp[k++] = key_compare(a[j], a[i]) < 0 ? a[j++] : a[i++];
+    while (i < h) tmp[k++] = a[i++];
+    while (j < n) tmp[k++] = a[j++];
+    memcpy(a, tmp, n * sizeof *a);
+}
+
+void pl_list_sort_by(List *l, List *keys, const char *key_desc, int32_t descending) {
+    int64_t n = l->len;
+    if (n < 2) return;
+    int64_t *pos = (int64_t *)pl_alloc_text(n * sizeof *pos), *tmp = (int64_t *)pl_alloc_text(n * sizeof *tmp);
+    for (int64_t i = 0; i < n; i++) pos[i] = i;
+    sort_keys = keys->items, sort_kind = *key_desc, sort_desc = descending;
+    merge_positions(pos, tmp, n);
+    int64_t *items = l->plain ? (int64_t *)pl_alloc_text(n * sizeof *items) : pl_alloc(n * sizeof *items);
+    for (int64_t i = 0; i < n; i++) items[i] = l->items[pos[i]];
+    memcpy(l->items, items, n * sizeof *items);
+}
+
+void pl_list_sort(List *l, const char *desc, int32_t descending) {
     if (l->len < 2) return;
+    if (descending) {
+        pl_list_sort_by(l, l, desc, 1);
+        return;
+    }
     int64_t *tmp = l->plain ? (int64_t *)pl_alloc_text(l->len * sizeof *tmp) : pl_alloc(l->len * sizeof *tmp);
     merge_sort(l->items, tmp, l->len, *desc);
+}
+
+int64_t pl_list_best(List *l, List *keys, const char *key_desc, int32_t largest) {
+    if (!l->len) pl_fail("There is no %s item in an empty list.", largest ? "largest" : "smallest");
+    int64_t best = 0;
+    for (int64_t i = 1; i < l->len; i++) {
+        int c = pl_slot_compare(keys->items[i], keys->items[best], *key_desc);
+        if (largest ? c > 0 : c < 0) best = i;
+    }
+    return l->items[best];
 }
 
 void pl_list_reverse(List *l) {

@@ -1,6 +1,7 @@
 /* Start-up, errors, printing, numbers, input and command-line arguments. */
 #include <gc.h>
 #include <math.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,16 +30,46 @@ void pl_exit(void) {
     exit(0);
 }
 
+/* "try the following": a stack of places to jump back to when something goes wrong */
+typedef struct Trap {
+    jmp_buf jb;
+    struct Trap *prev;
+} Trap;
+
+static Trap *traps;
+static char *last_error = "";
+
+void *pl_try_push(void) {
+    Trap *t = GC_MALLOC(sizeof *t);
+    t->prev = traps;
+    traps = t;
+    return t->jb;
+}
+
+void pl_try_pop(void) {
+    if (traps) traps = traps->prev;
+}
+
+char *pl_error_text(void) { return last_error; }
+
 void pl_fail(const char *fmt, ...) {
-    fflush(stdout);
-    fprintf(stderr, "%s, line %d:\n", pl_file, pl_line);
+    char msg[4096];
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    vsnprintf(msg, sizeof msg, fmt, ap);
     va_end(ap);
-    fputc('\n', stderr);
+    if (traps) {
+        Trap *t = traps;
+        traps = t->prev;
+        last_error = pl_strdup(msg);
+        longjmp(t->jb, 1);
+    }
+    fflush(stdout);
+    fprintf(stderr, "%s, line %d:\n%s\n", pl_file, pl_line, msg);
     exit(1);
 }
+
+void pl_raise(const char *text) { pl_fail("%s", nz(text)); }
 
 void *pl_alloc(size_t n) { return GC_MALLOC(n ? n : 1); }
 char *pl_alloc_text(size_t n) { return GC_MALLOC_ATOMIC(n ? n : 1); }

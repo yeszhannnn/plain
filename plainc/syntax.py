@@ -65,15 +65,43 @@ def is_comment(line):
     return s.startswith("note:") or s.startswith("#")
 
 
-def split_sentences(src, file=""):
-    """Split source into sentences on '.', ':' and newlines, respecting quotes.
+CONTINUE_WORDS = {"and", "or", "with", "of", "to", "by"}
 
-    Empty lines and comment lines ("Note: ..." or "# ...") are skipped.
-    """
+
+def continues(text):
+    """A line that ends with a comma or a joining word goes on to the next line."""
+    t = text.rstrip()
+    if not t or t.endswith((".", ":", '"', "'")):
+        return False
+    if t.endswith(","):
+        return True
+    words = t.lower().split()
+    return words[-1] in CONTINUE_WORDS or (len(words) > 1 and words[-2:] in (["and", "then"], ["followed", "by"]))
+
+
+def logical_lines(src):
+    """Source lines with long sentences joined back together; comments and empty lines dropped."""
     out = []
     for lineno, raw in enumerate(normalize_quotes(src).split("\n"), 1):
         if not raw.strip() or is_comment(raw):
             continue
+        start = raw.strip().lower()
+        if out and (continues(out[-1][1]) or start.startswith(("and then ", "followed by "))):
+            out[-1] = (out[-1][0], out[-1][1].rstrip() + " " + raw.strip())
+        else:
+            out.append((lineno, raw))
+    return out
+
+
+def split_sentences(src, file=""):
+    """Split source into sentences on '.', ':' and newlines, respecting quotes.
+
+    Empty lines and comment lines ("Note: ..." or "# ...") are skipped. A line that ends
+    with a comma or a joining word ("and", "and then", "or", "with", "of", "to", "by"),
+    or a line that starts with "and then", continues the sentence before it.
+    """
+    out = []
+    for lineno, raw in logical_lines(src):
         buf, quote, i = "", None, 0
         while i < len(raw):
             ch = raw[i]

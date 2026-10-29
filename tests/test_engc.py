@@ -180,6 +180,34 @@ class Objects(unittest.TestCase):
         self.assertIn("There is no node here: it is nothing.", a[1])
 
 
+class ListsAndErrors(unittest.TestCase):
+    def test_sort_filter_map_best(self):
+        text = ("set scores to 40, 95, 70 and 95.\nsort scores from highest to lowest.\nsay scores.\n"
+                "say n times 2 for every n in scores where n is more than 50.\n"
+                "set words to \"ccc\", \"a\" and \"bb\".\nsort words by the length of each.\nsay words.\n"
+                "say the w in words with the largest length of w.\n")
+        self.assertEqual(run_text(text), "95, 95, 70 and 40\n190, 190 and 140\na, bb and ccc\nccc\n")
+
+    def test_try_and_fail(self):
+        text = ("try the following.\n  say item 9 of (1 and 2).\nif something goes wrong\n"
+                "  say \"caught:\" and then the error.\nthat's all.\n"
+                "try to fail with \"boom\", and if that fails, say the error.\n"
+                "set total to 0.\nfor every n from 1 to 5\n  try the following.\n    add n to total.\n"
+                "    if n is 3, stop the loop.\n  that's all.\nthat's all.\nsay total.\n")
+        expected = "caught: There is no item 9: the list has 2 items.\nboom\n6\n"
+        self.assertEqual(run_text(text), expected)
+        self.assertEqual(native(text)[0], expected)
+
+    def test_uncaught_fail(self):
+        a, b = interpreted('fail with "bad input".\n'), native('fail with "bad input".\n')
+        self.assertEqual(a, b)
+        self.assertEqual(a[1], "prog.eng, line 1:\nbad input\n")
+
+    def test_long_sentences(self):
+        self.assertEqual(run_text('say "one," and then\n  "two" and then "three"\n  and then "four".\n'),
+                         "one, two three four\n")
+
+
 class Errors(unittest.TestCase):
     def test_plus_times_is_ambiguous(self):
         with self.assertRaises(AmbiguityError) as cm:

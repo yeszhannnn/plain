@@ -11,7 +11,7 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english, is_bot, walk_stmts, New, Field, Nothing)
+                   english, is_bot, walk_stmts, New, Field, Nothing, Try, Fail, ErrorText, Comprehension, BestBy)
 from .errors import EngError
 from .types import BOOL, FLOAT, INT, TEXT, desc
 
@@ -84,7 +84,14 @@ declare void @pl_list_add(ptr, i64)
 declare void @pl_list_remove_at(ptr, i64)
 declare void @pl_list_remove_value(ptr, i64, ptr)
 declare i32 @pl_list_contains(ptr, i64, ptr)
-declare void @pl_list_sort(ptr, ptr)
+declare void @pl_list_sort(ptr, ptr, i32)
+declare void @pl_list_sort_by(ptr, ptr, ptr, i32)
+declare i64 @pl_list_best(ptr, ptr, ptr, i32)
+declare ptr @pl_try_push()
+declare void @pl_try_pop()
+declare i32 @_setjmp(ptr) returns_twice
+declare ptr @pl_error_text()
+declare void @pl_raise(ptr)
 declare void @pl_list_reverse(ptr)
 declare ptr @pl_list_slice(ptr, i64, i64)
 declare i64 @pl_list_random(ptr)
@@ -141,7 +148,9 @@ class Fn:
         self.prologue = []
         self.tmp = 0
         self.terminated = False
-        self.loops = []
+        self.loops = []           # (continue label, break label, "try" depth at the loop)
+        self.tries = 0            # how many "try" blocks the code being emitted is inside
+        self.volatile = False     # the function has "try": keep variables in memory across longjmp
 
     def t(self):
         self.tmp += 1
@@ -154,6 +163,11 @@ class Fn:
     def emit(self, s):
         if self.terminated:
             self.start(self.label("dead"))
+        if self.volatile:
+            if " = load " in s:
+                s = s.replace(" = load ", " = load volatile ", 1)
+            elif s.startswith("store "):
+                s = "store volatile " + s[6:]
         self.lines.append("  " + s)
 
     def start(self, label):
@@ -349,6 +363,30 @@ class Gen:
             return self.builtin(e, t)
         if isinstance(e, Nothing):
             return "null"
+        if isinstance(e, ErrorText):
+            return self.call("ptr", "pl_error_text")
+        if isinstance(e, Comprehension):
+            items = self.expr(e.items)
+            el, out_t = self.T(e.items).args[0], t.args[0]
+            out = self.call("ptr", "pl_list_of", f"ptr {self.desc(out_t)}")
+
+            def body(nxt):
+                if e.cond is not None:
+                    c = self.expr(e.cond)
+                    take = f.label("each.take")
+                    f.term(f"br i1 {c}, label %{take}, label %{nxt}")
+                    f.start(take)
+                v = self.conv(self.expr(e.expr), self.T(e.expr), out_t) if e.expr is not None else \
+                    self.expr(e.var)
+                self.call("void", "pl_list_add", f"ptr {out}, i64 {self.to_slot(v, out_t)}")
+            self.each_item(items, el, e.var, body)
+            return out
+        if isinstance(e, BestBy):
+            items = self.expr(e.items)
+            keys, kt = self.keys_of(items, t, e.var, e.key)
+            best = self.call("i64", "pl_list_best", f"ptr {items}, ptr {keys}, ptr {self.desc(kt)}, "
+                                                    f"i32 {int(e.largest)}")
+            return self.from_slot(best, t)
         if isinstance(e, Field):
             o = self.expr(e.obj)
             s = self.call("i64", "pl_obj_get", f"ptr {o}, i32 {e.kind.id}, i32 {e.kind.fields.index(e.field)}")
@@ -590,9 +628,53 @@ class Gen:
             self.stmt(s)
 
     def loop(self, cont, brk, body):
-        self.f.loops.append((cont, brk))
+        self.f.loops.append((cont, brk, self.f.tries))
         self.block(body)
         self.f.loops.pop()
+
+    def leave_tries(self, depth):
+        """Jumping out of "try" blocks: forget their error handlers."""
+        for _ in range(self.f.tries - depth):
+            self.call("void", "pl_try_pop")
+
+    def each_item(self, items, el, var, body):
+        """Go through a list (as it was at the start); body(next_label) is emitted for every item."""
+        f = self.f
+        n = self.call("i64", "pl_list_len", f"ptr {items}")
+        ctr = f.t().replace("%t", "%item")
+        f.alloca(ctr, "i64")
+        f.emit(f"store i64 0, ptr {ctr}")
+        cond, step, done = f.label("item.cond"), f.label("item.next"), f.label("item.end")
+        f.start(cond)
+        i, c = f.t(), f.t()
+        f.emit(f"{i} = load i64, ptr {ctr}")
+        f.emit(f"{c} = icmp slt i64 {i}, {n}")
+        body_label = f.label("item.body")
+        f.term(f"br i1 {c}, label %{body_label}, label %{done}")
+        f.start(body_label)
+        pos = f.t()
+        f.emit(f"{pos} = add i64 {i}, 1")
+        item = self.from_slot(self.call("i64", "pl_list_get", f"ptr {items}, i64 {pos}"), el)
+        self.write_target(var, item, el)
+        body(step)
+        f.start(step)
+        i2, nx = f.t(), f.t()
+        f.emit(f"{i2} = load i64, ptr {ctr}")
+        f.emit(f"{nx} = add i64 {i2}, 1")
+        f.emit(f"store i64 {nx}, ptr {ctr}")
+        f.term(f"br label %{cond}")
+        f.start(done)
+
+    def keys_of(self, items, el, var, key):
+        """A list with the key of every item, for sorting and for "with the largest"."""
+        kt = self.T(key)
+        keys = self.call("ptr", "pl_list_of", f"ptr {self.desc(kt)}")
+
+        def body(nxt):
+            k = self.expr(key)
+            self.call("void", "pl_list_add", f"ptr {keys}, i64 {self.to_slot(k, kt)}")
+        self.each_item(items, el, var, body)
+        return keys, kt
 
     def stmt(self, s):
         f = self.f
@@ -736,19 +818,44 @@ class Gen:
             f.term(f"br label %{done}")
             f.start(done)
         elif isinstance(s, Break):
+            self.leave_tries(f.loops[-1][2])
             f.term(f"br label %{f.loops[-1][1]}")
         elif isinstance(s, Continue):
+            self.leave_tries(f.loops[-1][2])
             f.term(f"br label %{f.loops[-1][0]}")
+        elif isinstance(s, Try):
+            jb = self.call("ptr", "pl_try_push")
+            r, c = f.t(), f.t()
+            f.emit(f"{r} = call i32 @_setjmp(ptr {jb}) returns_twice")
+            f.emit(f"{c} = icmp eq i32 {r}, 0")
+            body, failed, done = f.label("try.body"), f.label("try.failed"), f.label("try.end")
+            f.term(f"br i1 {c}, label %{body}, label %{failed}")
+            f.start(body)
+            f.tries += 1
+            self.block(s.body)
+            f.tries -= 1
+            self.call("void", "pl_try_pop")
+            f.term(f"br label %{done}")
+            f.start(failed)
+            self.block(s.handler or [])
+            f.term(f"br label %{done}")
+            f.start(done)
+        elif isinstance(s, Fail):
+            self.call("void", "pl_raise", f"ptr {self.glued(s.parts)}")
+            f.term("unreachable")
         elif isinstance(s, Exit):
             self.call("void", "pl_exit")
             f.term("unreachable")
         elif isinstance(s, Return):
+            value = None
+            if s.expr is not None:
+                rt = self.types.ret_type(self.sig)
+                value = self.conv(self.expr(s.expr), self.T(s.expr), rt)
+            self.leave_tries(0)
             if s.expr is None:
                 f.term("ret void")
             else:
-                rt = self.types.ret_type(self.sig)
-                v = self.conv(self.expr(s.expr), self.T(s.expr), rt)
-                f.term(f"ret {llt(rt)} {v}")
+                f.term(f"ret {llt(rt)} {value}")
         elif isinstance(s, RemoveValue):
             lst = self.expr(s.items)
             el = self.T(s.items).args[0]
@@ -761,7 +868,13 @@ class Gen:
             self.call("void", "pl_map_remove", f"ptr {m}, i64 {self.to_slot(self.expr(s.key), self.T(s.key))}")
         elif isinstance(s, Sort):
             lst = self.expr(s.items)
-            self.call("void", "pl_list_sort", f"ptr {lst}, ptr {self.desc(self.T(s.items).args[0])}")
+            el = self.T(s.items).args[0]
+            if s.key is None:
+                self.call("void", "pl_list_sort", f"ptr {lst}, ptr {self.desc(el)}, i32 {int(s.descending)}")
+            else:
+                keys, kt = self.keys_of(lst, el, s.var, s.key)
+                self.call("void", "pl_list_sort_by", f"ptr {lst}, ptr {keys}, ptr {self.desc(kt)}, "
+                                                     f"i32 {int(s.descending)}")
         elif isinstance(s, Reverse):
             self.call("void", "pl_list_reverse", f"ptr {self.expr(s.items)}")
         elif isinstance(s, Ask):
@@ -786,6 +899,7 @@ class Gen:
         header = (f"define internal {llt(ret) if ret else 'void'} @plain.{sig.name}(" +
                   ", ".join(f"{llt(t)} %p.{san(n)}" for n, t in zip(sig.params, params)) + ")")
         f = self.f = Fn(self, header)
+        f.volatile = any(isinstance(x, Try) for x in walk_stmts(sig.body))
         self.sig = sig
         local_types = {name: t for name, func, t in self.types.variables("local") if func == sig.name}
         for name, t in local_types.items():
@@ -808,6 +922,7 @@ class Gen:
 
     def main(self):
         f = self.f = Fn(self, "define i32 @main(i32 %argc, ptr %argv)")
+        f.volatile = any(isinstance(x, Try) for x in walk_stmts([s for s in self.prog if not isinstance(s, FuncDef)]))
         self.sig = None
         f.emit("call void @pl_init(i32 %argc, ptr %argv)")
         kinds = list(self.types.kinds.by_name.values()) if self.types.kinds else []

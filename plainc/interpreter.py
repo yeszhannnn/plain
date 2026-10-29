@@ -13,7 +13,7 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english, New, Field, Nothing)
+                   english, New, Field, Nothing, Try, Fail, ErrorText, Comprehension, BestBy)
 from .errors import EngError
 from .types import prune
 from .values import (DEC_RE, INT_RE, KINDS, Obj, fmt, join_parts, lines_of, lower, text_same, upper, words_of,
@@ -126,6 +126,7 @@ class Interpreter:
         for name, func, t in types.variables("local"):
             self.local_types.setdefault(func, {})[name] = t
         self.frames = []
+        self.error = ""          # text of the last error caught by "try"
         self.users = {}
         KINDS.clear()
         if types.kinds:
@@ -256,6 +257,25 @@ class Interpreter:
             return self.obj(e).fields[e.field]
         if isinstance(e, Nothing):
             return None
+        if isinstance(e, ErrorText):
+            return self.error
+        if isinstance(e, Comprehension):
+            out, el = [], self.T(e).args[0]
+            for item in list(self.ev(e.items)):
+                self.store(e.var, item)
+                if e.cond is None or self.ev(e.cond):
+                    out.append(item if e.expr is None else coerce(self.ev(e.expr), el))
+            return out
+        if isinstance(e, BestBy):
+            items = list(self.ev(e.items))
+            if not items:
+                self.fail(f"There is no {'largest' if e.largest else 'smallest'} item in an empty list.")
+            keys = self.keys(e.var, items, e.key)
+            best = 0
+            for i in range(1, len(items)):
+                if (keys[i] > keys[best]) if e.largest else (keys[i] < keys[best]):
+                    best = i
+            return items[best]
         if isinstance(e, New):
             fields = {f: zero(t) for f, _, t in KINDS[e.kind.name]}
             types = {f: t for f, _, t in KINDS[e.kind.name]}
@@ -513,7 +533,21 @@ class Interpreter:
         elif isinstance(s, RemoveKey):
             self.ev(s.table).pop(self.ev(s.key), None)
         elif isinstance(s, Sort):
-            self.ev(s.items).sort()
+            items = self.ev(s.items)
+            if s.key is None:
+                items.sort(reverse=s.descending)
+            else:
+                keys = self.keys(s.var, list(items), s.key)
+                order = sorted(range(len(items)), key=lambda i: keys[i], reverse=s.descending)
+                items[:] = [items[i] for i in order]
+        elif isinstance(s, Try):
+            try:
+                self.run_block(s.body)
+            except EngError as err:
+                self.error = err.message
+                self.run_block(s.handler or [])
+        elif isinstance(s, Fail):
+            raise EngError(join_parts(fmt(self.ev(p), self.T(p)) for p in s.parts), self.line, self.file)
         elif isinstance(s, Reverse):
             self.ev(s.items).reverse()
         elif isinstance(s, Ask):
@@ -524,6 +558,13 @@ class Interpreter:
             pass
         else:
             self.fail(f"internal: unknown statement {s}")
+
+    def keys(self, var, items, key):
+        out = []
+        for item in items:
+            self.store(var, item)
+            out.append(self.ev(key))
+        return out
 
     def add_to(self, s):
         t = s.target

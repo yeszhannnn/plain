@@ -563,6 +563,55 @@
     ],
     "ISSOMETHING": [
       "is not nothing"
+    ],
+    "TRY": [
+      "try following",
+      "try this"
+    ],
+    "TRY_TO": [
+      "try to"
+    ],
+    "ON_ERROR": [
+      "if something goes wrong",
+      "if anything goes wrong",
+      "if it fails",
+      "if that fails",
+      "if this fails",
+      "in case of error",
+      "on error"
+    ],
+    "FAIL": [
+      "fail with",
+      "stop with error",
+      "raise error"
+    ],
+    "ERROR": [
+      "error",
+      "what went wrong"
+    ],
+    "DESCENDING": [
+      "from highest to lowest",
+      "from largest to smallest",
+      "from biggest to smallest",
+      "from most to least",
+      "from z to a",
+      "in reverse order",
+      "in descending order"
+    ],
+    "ASCENDING": [
+      "from lowest to highest",
+      "from smallest to largest",
+      "from least to most",
+      "from a to z",
+      "in ascending order"
+    ],
+    "WHERE": [
+      "where",
+      "whose",
+      "that are",
+      "that is",
+      "which are",
+      "which is"
     ]
   },
   "symbols": {
