@@ -451,7 +451,7 @@ pub fn apply_lexicon(toks: &[Tok], lx: &Lexicon) -> Vec<Tok> {
                 if window.iter().all(|w| w.kind == "WORD") {
                     let key: Vec<String> = window.iter().map(|w| w.value.clone()).collect();
                     if let Some(kw) = lx.phrases.get(&key) {
-                        if !(n > 1 && lx.protected.contains(&key[0]) && key[1] == "of") {
+                        if !(n == 2 && lx.protected.contains(&key[0]) && key[1] == "of") {
                             let text: Vec<&str> = window.iter().map(|w| w.text.as_str()).collect();
                             out.push(Tok::new(kw, &key.join(" "), &text.join(" ")));
                             i += n;

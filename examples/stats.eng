@@ -1,0 +1,23 @@
+Note: a week of temperatures: average, spread, warmest day and a small chart.
+
+set days to "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" and "Sun".
+set temps to 21.5, 23.0, 19.8, 25.4, 24.1, 18.9 and 22.7.
+
+set mean to the average of temps.
+set total to 0.0.
+for every t in temps, add (t minus mean) squared to total.
+set spread to the square root of (total divided by the number of items in temps).
+
+say "Average:" and then mean with 2 decimals and then "°C".
+say "Spread:" and then spread with 2 decimals and then "°C".
+say "From" and then the smallest of temps and then "to" and then the largest of temps and then "°C".
+
+set warm to every t in temps where t is more than mean.
+say "Days above average:" and then the number of items in warm.
+
+say "".
+for every i from 1 to the number of items in days
+  set t to item i of temps.
+  set bar to "#" repeated (t minus 15) rounded times.
+  say item i of days padded to 4 and then t with 1 decimals padded on the left to 5 and then " " and then bar.
+that's all.

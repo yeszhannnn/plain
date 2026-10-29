@@ -1,0 +1,37 @@
+Note: a notes bot built on a kind of thing and JSON. Every user keeps their own notes,
+Note: the bot remembers them after a restart, and /export sends them as JSON.
+
+a note has a text and a number (number).
+remember everything in "notes-memory.json".
+set saved to 0.
+
+when someone sends "/start", reply "Send me any text to keep it as a note. Commands: /list, /find word, /export, /clear." with buttons "/list", "/export" and "/clear".
+
+when someone sends "/list"
+  if the number of items in their notes is 0, reply "No notes yet.".
+  otherwise
+    set their lines to an empty list.
+    for every note in their notes, add the number of note and then "." and then the text of note to their lines.
+    reply their lines joined with a new line.
+  that's all.
+that's all.
+
+when someone sends a message that starts with "/find"
+  set their word to (the message with "/find" replaced by "") trimmed.
+  set their found to every note in their notes where the text of note contains their word.
+  if the number of items in their found is 0, reply "Nothing about" and then their word and then ".".
+  otherwise reply (the text of note for every note in their found) joined with a new line.
+that's all.
+
+when someone sends "/export", reply their notes as json.
+
+when someone sends "/clear"
+  set their notes to an empty list.
+  reply "All your notes are gone.".
+that's all.
+
+when someone sends anything else
+  add a new note with text the message and number the number of items in their notes plus 1 to their notes.
+  add 1 to saved.
+  reply "Saved as note" and then the number of items in their notes and then ". Everyone saved" and then saved and then "notes so far.".
+that's all.

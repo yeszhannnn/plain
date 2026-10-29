@@ -290,7 +290,7 @@ def apply_lexicon(toks, lx):
                 window = toks[i:i + n]
                 if all(w.kind == "WORD" for w in window):
                     key = tuple(w.value for w in window)
-                    if key in lx.phrases and not (n > 1 and key[0] in lx.protected and key[1] == "of"):
+                    if key in lx.phrases and not (n == 2 and key[0] in lx.protected and key[1] == "of"):
                         out.append(Tok(lx.phrases[key], " ".join(key), " ".join(w.text for w in window)))
                         i += n
                         matched = True

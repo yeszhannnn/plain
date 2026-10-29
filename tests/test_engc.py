@@ -288,6 +288,10 @@ def bot_replies(name, script, backend, cwd=None):
         exe = os.path.join(BUILD, name[:-4] + "-bot")
         engc.build(engc.compile_file(path), exe)
         cmd = [exe]
+    elif backend == "rust":
+        exe = os.path.join(BUILD, name[:-4] + "-rs-bot")
+        subprocess.run([PLAIN_RS, "build", path, "-o", exe], check=True, capture_output=True)
+        cmd = [exe]
     else:
         cmd = [sys.executable, os.path.join(ROOT, "engc.py"), "run", path]
     old = os.getcwd()
@@ -655,6 +659,22 @@ class Bots(unittest.TestCase):
             second = bot_replies("todo_bot.eng", say("/list", "/done 1", "/list"), b, cwd=work)
             self.assertEqual([r[0] for r in second],
                              ["Your tasks:\n1. buy milk\n2. call mom", "Done: buy milk", "Your tasks:\n1. call mom"], b)
+
+    def test_notes_bot(self):
+        backends = self.BACKENDS + (("rust",) if shutil.which("cargo") else ())
+        if "rust" in backends:
+            subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=os.path.join(ROOT, "compiler-rs"), check=True)
+        for b in backends:
+            work = tempfile.mkdtemp(prefix=f"plain-notes-{b}-")
+            first = bot_replies("notes_bot.eng", say("buy milk", "call mom", "/find milk", "/export"), b, cwd=work)
+            self.assertEqual([r[0] for r in first], [
+                "Saved as note 1. Everyone saved 1 notes so far.",
+                "Saved as note 2. Everyone saved 2 notes so far.",
+                "buy milk",
+                '[{"text": "buy milk", "number": 1}, {"text": "call mom", "number": 2}]'], b)
+            second = bot_replies("notes_bot.eng", say("/list", "/clear", "/list", "/find tea"), b, cwd=work)
+            self.assertEqual([r[0] for r in second], [
+                "1. buy milk\n2. call mom", "All your notes are gone.", "No notes yet.", "Nothing about tea."], b)
 
     def test_bot_words_outside_a_rule(self):
         with self.assertRaises(EngError):
