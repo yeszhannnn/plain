@@ -4,6 +4,7 @@ import json
 import math
 import os
 import random
+import subprocess
 import sys
 import time
 import urllib.error
@@ -13,11 +14,13 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english, New, Field, Nothing, Try, Fail, ErrorText, Comprehension, BestBy)
+                   english, New, Field, Nothing, Try, Fail, ErrorText, Comprehension, BestBy, FromJson, Eval)
 from .errors import EngError
 from .types import prune
-from .values import (DEC_RE, INT_RE, KINDS, Obj, fmt, join_parts, lines_of, lower, text_same, upper, words_of,
-                     wrap)
+from .values import (DEC_RE, INT_RE, KINDS, Obj, fmt, from_data, join_parts, json_text, lines_of, lower,
+                     text_same, to_data, upper, words_of, wrap)
+
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
 class BreakSignal(Exception):
@@ -127,6 +130,7 @@ class Interpreter:
             self.local_types.setdefault(func, {})[name] = t
         self.frames = []
         self.error = ""          # text of the last error caught by "try"
+        self.exit_code = 0       # of the last command started with "run"
         self.users = {}
         KINDS.clear()
         if types.kinds:
@@ -259,6 +263,12 @@ class Interpreter:
             return None
         if isinstance(e, ErrorText):
             return self.error
+        if isinstance(e, FromJson):
+            try:
+                data = json.loads(self.ev(e.expr))
+            except ValueError:
+                self.fail("The text is not valid JSON.")
+            return from_data(data, self.T(e))
         if isinstance(e, Comprehension):
             out, el = [], self.T(e).args[0]
             for item in list(self.ev(e.items)):
@@ -414,7 +424,75 @@ class Interpreter:
             return list(self.argv)
         if n == "known":
             return args[1] in a
+        if n == "now":
+            t = time.localtime()
+            return Obj("moment", {"year": t.tm_year, "month": t.tm_mon, "day": t.tm_mday, "hour": t.tm_hour,
+                                  "minute": t.tm_min, "second": t.tm_sec, "weekday": WEEKDAYS[t.tm_wday]})
+        if n == "timestamp":
+            return int(time.time())
+        if n == "millis":
+            return int(time.time() * 1000)
+        if n in ("sin", "cos", "tan"):
+            return getattr(math, n)(a)
+        if n == "log":
+            if a <= 0:
+                self.fail("I can't take the logarithm of zero or a negative number.")
+            return math.log(a)
+        if n == "random_float":
+            return args[0] + (args[1] - args[0]) * random.random()
+        if n == "code":
+            if not a:
+                self.fail("There is no letter to take the code of: the text is empty.")
+            return ord(a[0])
+        if n == "char":
+            if a < 0 or a > 0x10FFFF or 0xD800 <= a <= 0xDFFF:
+                self.fail(f"There is no letter with code {a}.")
+            return chr(a)
+        if n == "env":
+            return os.environ.get(a, "")
+        if n == "position":
+            return args[1].find(a) + 1 if a in args[1] else 0
+        if n in ("pad", "pad_left"):
+            text = fmt(a, self.T(e.args[0]))
+            return text.rjust(args[1]) if n == "pad_left" else text.ljust(args[1])
+        if n == "repeat_text":
+            return a * max(args[1], 0)
+        if n == "decimals":
+            return f"{float(a):.{min(max(args[1], 0), 20)}f}"
+        if n == "to_json":
+            return json_text(a, self.T(e.args[0]))
+        if n in ("fetch", "post"):
+            return self.http(e, args)
+        if n == "wait":
+            time.sleep(max(a * args[1] / 1000, 0))
+            return 0
+        if n in ("run", "run_output"):
+            self.out.flush()
+            sys.stdout.flush()
+            p = subprocess.run(a, shell=True, stdout=subprocess.PIPE if n == "run_output" else None)
+            self.exit_code = p.returncode
+            return p.stdout.decode("utf-8", "replace") if n == "run_output" else p.returncode
+        if n == "exit_code":
+            return self.exit_code
         self.fail(f"internal: unknown builtin {n}")
+
+    def http(self, e, args):
+        if e.name == "fetch":
+            url, data, kind = args[0], None, None
+        else:
+            body, url = args
+            bt = self.T(e.args[0])
+            text = body if bt.name == "Text" else json_text(body, bt)
+            json_like = bt.name != "Text" or text.strip().startswith(("{", "["))
+            data, kind = text.encode("utf-8"), ("application/json" if json_like else "text/plain; charset=utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": kind} if kind else {})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as err:
+            self.fail(f"The request to {url} failed with status {err.code}.")
+        except (urllib.error.URLError, OSError, ValueError):
+            self.fail(f"I couldn't reach {url}.")
 
     def call(self, e):
         sig = e.func
@@ -546,6 +624,8 @@ class Interpreter:
             except EngError as err:
                 self.error = err.message
                 self.run_block(s.handler or [])
+        elif isinstance(s, Eval):
+            self.ev(s.expr)
         elif isinstance(s, Fail):
             raise EngError(join_parts(fmt(self.ev(p), self.T(p)) for p in s.parts), self.line, self.file)
         elif isinstance(s, Reverse):
@@ -632,14 +712,7 @@ class Interpreter:
     # ── bot memory on disk: same JSON as runtime/telegram.c ──
 
     def save(self, path):
-        def enc(v, t):
-            if t.name.startswith("Kind:"):
-                return None if v is None else {d: enc(v.fields[k], ft) for k, d, ft in KINDS[t.name[5:]]}
-            if t.name == "List":
-                return [enc(x, t.args[0]) for x in v]
-            if t.name == "Map":
-                return {str(k): enc(x, t.args[1]) for k, x in v.items()}
-            return v
+        enc = to_data
         data = {"globals": {n: enc(self.globals[n], t) for n, _, t in self.types.variables("global")},
                 "users": {str(chat): {n[len("their."):]: enc(v, self.user_types[n]) for n, v in vals.items()}
                           for chat, vals in self.users.items()}}
@@ -655,31 +728,7 @@ class Interpreter:
         except (OSError, ValueError):
             return
 
-        def dec(v, t):
-            if t.name.startswith("Kind:"):
-                if not isinstance(v, dict):
-                    return None
-                return Obj(t.name[5:], {k: dec(v[d], ft) if d in v else zero(ft) for k, d, ft in KINDS[t.name[5:]]})
-            if t.name == "List":
-                return [dec(x, t.args[0]) for x in v] if isinstance(v, list) else []
-            if t.name == "Map":
-                if not isinstance(v, dict):
-                    return {}
-                key = int if t.args[0].name == "Int" else str
-                out = {}
-                for k, x in v.items():
-                    try:
-                        out[key(k)] = dec(x, t.args[1])
-                    except ValueError:
-                        pass
-                return out
-            if t.name == "Float":
-                return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
-            if t.name == "Int":
-                return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
-            if t.name == "Bool":
-                return v if isinstance(v, bool) else False
-            return v if isinstance(v, str) else ""
+        dec = from_data
         for n, _, t in self.types.variables("global"):
             if n in data.get("globals", {}):
                 self.globals[n] = dec(data["globals"][n], t)

@@ -162,6 +162,51 @@ char *pl_replace(const char *s, const char *a, const char *b) {
     return buf_take(&out);
 }
 
+int64_t pl_code(const char *s) {
+    s = nz(s);
+    if (!*s) pl_fail("There is no letter to take the code of: the text is empty.");
+    return decode(&s);
+}
+
+char *pl_char(int64_t code) {
+    if (code < 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
+        pl_fail("There is no letter with code %lld.", (long long)code);
+    Buf b = {0};
+    encode(&b, (uint32_t)code);
+    return buf_take(&b);
+}
+
+/* where needle starts in text, counted in letters from 1; 0 if it is not there */
+int64_t pl_position(const char *needle, const char *text) {
+    text = nz(text);
+    const char *hit = strstr(text, nz(needle));
+    if (!hit) return 0;
+    int64_t n = 1;
+    while (text < hit) decode(&text), n++;
+    return n;
+}
+
+char *pl_pad(const char *s, int64_t width, int32_t left) {
+    int64_t n = pl_text_len(s);
+    Buf b = {0};
+    if (!left) buf_puts(&b, s);
+    for (int64_t i = n; i < width; i++) buf_putc(&b, ' ');
+    if (left) buf_puts(&b, s);
+    return buf_take(&b);
+}
+
+char *pl_repeat_text(const char *s, int64_t n) {
+    Buf b = {0};
+    for (int64_t i = 0; i < n; i++) buf_puts(&b, s);
+    return buf_take(&b);
+}
+
+char *pl_decimals(double x, int64_t places) {
+    char tmp[512];
+    snprintf(tmp, sizeof tmp, "%.*f", (int)(places < 0 ? 0 : places > 20 ? 20 : places), x);
+    return pl_strdup(tmp);
+}
+
 /* ── splitting and joining ── */
 
 static void add_text(List *l, const char *s, size_t n) {

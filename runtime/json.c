@@ -195,6 +195,8 @@ J *jparse(const char *text) {
     return jval();
 }
 
+const char *jparse_end(void) { return jp; }
+
 J *jget(J *o, const char *key) {
     if (!o || o->type != J_OBJ) return NULL;
     for (int k = 0; k < o->len; k++)
@@ -208,6 +210,10 @@ void json_text(Buf *b, const char *s) {
         unsigned char c = *s;
         if (c == '"' || c == '\\') buf_putc(b, '\\'), buf_putc(b, c);
         else if (c == '\n') buf_puts(b, "\\n");
+        else if (c == '\t') buf_puts(b, "\\t");
+        else if (c == '\r') buf_puts(b, "\\r");
+        else if (c == '\b') buf_puts(b, "\\b");
+        else if (c == '\f') buf_puts(b, "\\f");
         else if (c < 0x20) {
             char tmp[8];
             snprintf(tmp, sizeof tmp, "\\u%04x", c);
@@ -215,4 +221,150 @@ void json_text(Buf *b, const char *s) {
         } else buf_putc(b, c);
     }
     buf_putc(b, '"');
+}
+
+/* the shortest decimal that reads back as the same number, as Python's json writes it */
+static void json_float(Buf *b, double x) {
+    char tmp[40];
+    if (x != x || x - x != 0) x = 0;
+    for (int digits = 1; digits <= 17; digits++) {
+        snprintf(tmp, sizeof tmp, "%.*g", digits, x);
+        if (strtod(tmp, NULL) == x) break;
+    }
+    if (!strpbrk(tmp, ".eni")) strcat(tmp, ".0");
+    buf_puts(b, tmp);
+}
+
+/* field "first name" is written as "first_name" */
+static void json_field(Buf *b, const char *name) {
+    char *key = pl_strdup(name);
+    for (char *p = key; *p; p++)
+        if (*p == ' ') *p = '_';
+    json_text(b, key);
+}
+
+void pl_json_write(Buf *b, int64_t v, const char *d) {
+    char tmp[40];
+    double x;
+    switch (*d) {
+    case 'i':
+        snprintf(tmp, sizeof tmp, "%lld", (long long)v);
+        buf_puts(b, tmp);
+        break;
+    case 'f':
+        memcpy(&x, &v, sizeof x);
+        json_float(b, x);
+        break;
+    case 's': json_text(b, (const char *)(intptr_t)v); break;
+    case 'b': buf_puts(b, v ? "true" : "false"); break;
+    case 'K': {
+        const Kind *k = pl_kind(d);
+        int64_t *o = (int64_t *)(intptr_t)v;
+        if (!o) {
+            buf_puts(b, "null");
+            break;
+        }
+        buf_putc(b, '{');
+        for (int i = 0; i < k->nfields; i++) {
+            if (i) buf_puts(b, ", ");
+            json_field(b, k->fields[i]);
+            buf_puts(b, ": ");
+            pl_json_write(b, o[i], k->descs[i]);
+        }
+        buf_putc(b, '}');
+        break;
+    }
+    case 'L': {
+        List *l = (List *)(intptr_t)v;
+        buf_putc(b, '[');
+        for (int64_t i = 0; i < pl_list_len(l); i++) {
+            if (i) buf_puts(b, ", ");
+            pl_json_write(b, l->items[i], d + 1);
+        }
+        buf_putc(b, ']');
+        break;
+    }
+    default: {
+        Map *m = (Map *)(intptr_t)v;
+        const char *vd = pl_skip_desc(d + 1);
+        List *keys = pl_map_keys(m);
+        buf_putc(b, '{');
+        for (int64_t i = 0; i < keys->len; i++) {
+            if (i) buf_puts(b, ", ");
+            if (d[1] == 's') json_text(b, (const char *)(intptr_t)keys->items[i]);
+            else {
+                snprintf(tmp, sizeof tmp, "\"%lld\"", (long long)keys->items[i]);
+                buf_puts(b, tmp);
+            }
+            buf_puts(b, ": ");
+            pl_json_write(b, pl_map_value_at(m, keys->items[i]), vd);
+        }
+        buf_putc(b, '}');
+    }
+    }
+}
+
+int64_t pl_json_read(J *j, const char *d) {
+    switch (*d) {
+    case 'i':
+        if (j && j->type == J_NUM) return j->is_float ? (int64_t)j->d : j->i;
+        return 0;
+    case 'f': {
+        double x = j && j->type == J_NUM ? (j->is_float ? j->d : (double)j->i) : 0.0;
+        int64_t v;
+        memcpy(&v, &x, sizeof v);
+        return v;
+    }
+    case 's': return (int64_t)(intptr_t)pl_strdup(j && j->type == J_STR ? j->s : "");
+    case 'b': return j && j->type == J_BOOL ? j->i : 0;
+    case 'K': {
+        if (!j || j->type != J_OBJ) return 0;
+        const Kind *k = pl_kind(d);
+        int64_t *o = pl_alloc((k->nfields ? k->nfields : 1) * sizeof(int64_t));
+        for (int i = 0; i < k->nfields; i++) {
+            char *key = pl_strdup(k->fields[i]);
+            for (char *p = key; *p; p++)
+                if (*p == ' ') *p = '_';
+            J *f = jget(j, key);
+            if (!f) f = jget(j, k->fields[i]);
+            o[i] = pl_json_read(f, k->descs[i]);
+        }
+        return (int64_t)(intptr_t)o;
+    }
+    case 'L': {
+        List *l = pl_list_of(d + 1);
+        for (int k = 0; j && j->type == J_ARR && k < j->len; k++) pl_list_add(l, pl_json_read(j->items[k], d + 1));
+        return (int64_t)(intptr_t)l;
+    }
+    default: {
+        Map *m = pl_map_new(d[1] == 's');
+        const char *vd = pl_skip_desc(d + 1);
+        for (int k = 0; j && j->type == J_OBJ && k < j->len; k++) {
+            int64_t key;
+            if (d[1] == 's') key = (int64_t)(intptr_t)pl_strdup(j->keys[k]);
+            else if (!pl_match_int(j->keys[k], &key)) continue;
+            pl_map_set(m, key, pl_json_read(j->items[k], vd));
+        }
+        return (int64_t)(intptr_t)m;
+    }
+    }
+}
+
+char *pl_to_json(int64_t v, const char *desc) {
+    Buf b = {0};
+    pl_json_write(&b, v, desc);
+    return buf_take(&b);
+}
+
+int64_t pl_from_json(const char *text, const char *desc) {
+    J *root = jparse(nz(text));
+    const char *rest = jparse_end();
+    while (rest && (*rest == ' ' || *rest == '\n' || *rest == '\t' || *rest == '\r')) rest++;
+    if (!root || (rest && *rest)) {
+        jfree(root);
+        pl_fail("The text is not valid JSON.");
+    }
+    int64_t v = pl_json_read(root, desc);
+    jfree(root);
+    return v;
 }

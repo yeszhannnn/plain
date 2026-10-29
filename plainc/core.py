@@ -133,6 +133,7 @@ class KindInfo:
     id: int = 0
     line: int = 0
     file: str = ""
+    field_specs: dict = field(default_factory=dict)   # key -> type written in brackets, or a kind's name
 
 @dataclass(eq=False)
 class New:
@@ -152,6 +153,23 @@ class Field:
 @dataclass(eq=False)
 class Nothing:
     def __str__(self): return "Nothing"
+
+@dataclass(eq=False)
+class FromJson:
+    """text as a list of books: JSON read straight into a type."""
+    expr: object
+    spec: tuple               # ("int",) ("float",) ("text",) ("bool",) ("kind", KindInfo) ("list", s) ("table", s)
+    def __str__(self): return f"FromJson({self.expr}, {spec_words(self.spec)})"
+
+
+def spec_words(spec):
+    if spec[0] == "list":
+        return f"a list of {spec_words(spec[1])}"
+    if spec[0] == "table":
+        return f"a table of {spec_words(spec[1])}"
+    if spec[0] == "kind":
+        return spec[1].name
+    return {"int": "numbers", "float": "decimals", "text": "texts", "bool": "yes/no values"}[spec[0]]
 
 @dataclass(eq=False)
 class ErrorText:
@@ -321,6 +339,12 @@ class Sort:
     def dump(self, ind):
         key = f", by {self.key}" if self.key is not None else ""
         return [f"{ind}Sort({self.items}{key}{', descending' if self.descending else ''})"]
+
+@dataclass(eq=False)
+class Eval:
+    """Work something out for what it does: wait, run a command, send a request."""
+    expr: object
+    def dump(self, ind): return [f"{ind}Do({self.expr})"]
 
 @dataclass(eq=False)
 class Try:

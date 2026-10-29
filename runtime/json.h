@@ -20,5 +20,8 @@ J *jparse(const char *text);
 J *jget(J *o, const char *key);
 void jfree(J *j);
 void json_text(Buf *b, const char *s);
+const char *jparse_end(void);
+void pl_json_write(Buf *b, int64_t v, const char *desc);
+int64_t pl_json_read(J *j, const char *desc);
 
 #endif

@@ -14,7 +14,7 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    ListLit, Logic, Lookup, Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem,
                    RemoveAt, RemoveKey, RemoveValue, Repeat, Reply, Return, Reverse, Seq, Slice, Sort, Text, Truth,
                    Var, While, WriteFile, english, KindInfo, New, Field, Nothing, Try, Fail, ErrorText,
-                   ErrorMark, Comprehension, BestBy)
+                   ErrorMark, Comprehension, BestBy, FromJson, Eval)
 from .errors import AmbiguityError, EngError
 from .syntax import USER, Lexicon, Tok, apply_lexicon, canonical, normalize, show, split_sentences, tokenize
 
@@ -24,7 +24,12 @@ CMPOPS = {"GT": ">", "LT": "<", "GE": ">=", "LE": "<=", "NE": "!=", "IS": "==",
           "CONTAINS": "contains", "STARTS": "starts"}
 PREFIX_BUILTINS = {"LENGTH": "length", "SUM": "sum", "AVERAGE": "average", "LARGEST": "largest",
                    "SMALLEST": "smallest", "SQRT": "sqrt", "ABS": "abs", "WORDSOF": "words", "LINESOF": "lines",
-                   "LETTERSOF": "letters", "CONTENTS": None}
+                   "LETTERSOF": "letters", "CONTENTS": None, "SIN": "sin", "COS": "cos", "TAN": "tan",
+                   "LOG": "log", "CODE_OF": "code", "CHAR_OF_CODE": "char", "ENV": "env"}
+NULLARY_BUILTINS = {"CURRENT_TIME": "now", "TIMESTAMP": "timestamp", "MILLIS": "millis", "EXIT_CODE": "exit_code"}
+SPEC_WORDS = {"number": ("int",), "numbers": ("int",), "decimal": ("float",), "decimals": ("float",),
+              "text": ("text",), "texts": ("text",), "word": ("text",), "words": ("text",)}
+MOMENT_FIELDS = ["year", "month", "day", "hour", "minute", "second", "weekday"]
 POSTFIX_BUILTINS = {"SQUARED": "squared", "ROUNDED": "round", "ROUNDUP": "round_up", "ROUNDDOWN": "round_down",
                     "UPPER": "upper", "LOWER": "lower", "TRIMMED": "trim", "ASNUMBER": "to_int",
                     "ASDECIMAL": "to_float", "ASTEXT": "to_text"}
@@ -164,10 +169,16 @@ def parse_kind_decl(sentence, lx, kinds):
     name = toks[0].value
     if name in kinds.by_name:
         fail(f'"{name}" is already described above.')
-    fields, display = [], {}
+    fields, display, specs = [], {}, {}
     parts = split_top(toks[2:], ("COMMA", "AND"))
     parts = [p for k, p in enumerate(parts) if p or not (k and toks[2:] and k < len(parts) - 1)]   # ", and"
     for part in parts:
+        spec = None
+        if part and part[-1].kind == "RP" and any(t.kind == "LP" for t in part):   # "a temperature (decimal)"
+            lp = max(k for k, t in enumerate(part) if t.kind == "LP")
+            part, spec = part[:lp], part[lp + 1:-1]
+        if len(part) > 1 and is_word(part[0], "some"):   # "some tags" is the field "tags"
+            part = part[1:]
         if not part or any(t.kind != "WORD" for t in part):
             fail(f'"{show(part)}" can\'t be the name of a field: use plain words that are not part of the language.')
         key = "_".join(t.value for t in part)
@@ -175,7 +186,56 @@ def parse_kind_decl(sentence, lx, kinds):
             fail(f'A {name} already has a {" ".join(t.text for t in part)}.')
         fields.append(key)
         display[key] = " ".join(t.text for t in part)
-    return KindInfo(name, toks[0].text, fields, display, line=sentence.line, file=sentence.file)
+        if spec is not None:
+            specs[key] = spec
+    return KindInfo(name, toks[0].text, fields, display, line=sentence.line, file=sentence.file, field_specs=specs)
+
+
+def spec_of(toks, kinds):
+    """A written type: number, decimal, text, yes/no, a book, a list of books, a table of numbers."""
+    toks = [t for t in toks if not is_word(t, "a", "an")]
+    if not toks:
+        return None
+    t = toks[0]
+    if t.kind == "LISTOF":
+        inner = spec_of(toks[1:], kinds)
+        return inner and ("list", inner)
+    if is_word(t, "list") and len(toks) > 1 and is_word(toks[1], "of"):
+        inner = spec_of(toks[2:], kinds)
+        return inner and ("list", inner)
+    if is_word(t, "table") and len(toks) > 1 and is_word(toks[1], "of"):
+        inner = spec_of(toks[2:], kinds)
+        return inner and ("table", inner)
+    if len(toks) != 1 and not (len(toks) == 3 and toks[1].text == "/"):
+        return None
+    words = "".join(x.text.lower() for x in toks)
+    if words in ("yes/no", "boolean", "truth"):
+        return ("bool",)
+    if len(toks) != 1:
+        return None
+    w = t.text.lower()
+    if w in SPEC_WORDS:
+        return SPEC_WORDS[w]
+    name = w[:-1] if w.endswith("s") and w[:-1] in kinds.by_name else w
+    if name in kinds.by_name:
+        return ("kind", kinds.by_name[name])
+    return None
+
+
+def resolve_field_specs(kinds):
+    """Turn the written field types into specs; a field named like a kind holds that kind."""
+    for k in kinds.by_name.values():
+        for key, raw in list(k.field_specs.items()):
+            if isinstance(raw, tuple):
+                continue
+            spec = spec_of(raw, kinds)
+            if spec is None:
+                raise EngError(f'I don\'t know the type "{show(raw)}". Use number, decimal, text, yes/no, '
+                               f'the name of a kind, or "a list of ..." and "a table of ...".', k.line, k.file)
+            k.field_specs[key] = spec
+        for key in k.fields:
+            if key not in k.field_specs and key in kinds.by_name:
+                k.field_specs[key] = ("kind", kinds.by_name[key])
 
 
 # ───────────── function headers ─────────────
@@ -380,6 +440,25 @@ class Parser:
             return [(Nothing(), i + 1)]
         if k == "ERROR":
             return [(ErrorText(), i + 1)]
+        if k in NULLARY_BUILTINS:
+            return [(Builtin(NULLARY_BUILTINS[k], []), i + 1)]
+        if k == "PI":
+            return [(Dec(3.141592653589793), i + 1)]
+        if k == "RANDOM_DEC":
+            res = []
+            if i + 1 < len(toks) and toks[i + 1].kind == "FROM":
+                for lo, j in self.exprs(toks, i + 2):
+                    if j < len(toks) and toks[j].kind in ("TO", "AND"):
+                        res += [(Builtin("random_float", [lo, hi]), m) for hi, m in self.tight(toks, j + 1)]
+            if not res:
+                self.err("Write it like: a random decimal from 0 to 1.")
+            return res
+        if k == "POSITION":
+            res = []
+            for x, j in self.exprs(toks, i + 1):
+                if is_word(toks[j] if j < len(toks) else None, "in"):
+                    res += [(Builtin("position", [x, t_]), m) for t_, m in self.tight(toks, j + 1)]
+            return res
         if k == "LISTOF":
             items, j = self.item_list(toks, i + 1)
             return [(ListLit(items), j)] if items else []
@@ -476,6 +555,23 @@ class Parser:
             return True
         return name not in self.kinds.fields and name not in self.funcs.first_words()
 
+    def type_spec(self, toks, i):
+        """What JSON text turns into: a book, a list of books, a table of numbers, a list of texts..."""
+        if i >= len(toks):
+            return []
+        t = toks[i]
+        if t.kind == "LISTOF":
+            return [(("list", s), j) for s, j in self.type_spec(toks, i + 1)]
+        if is_word(t, "table") and is_word(toks[i + 1] if i + 1 < len(toks) else None, "of"):
+            return [(("table", s), j) for s, j in self.type_spec(toks, i + 2)]
+        if t.kind == "WORD":
+            if t.value in SPEC_WORDS:
+                return [(SPEC_WORDS[t.value], i + 1)]
+            name = t.value[:-1] if t.value.endswith("s") and t.value[:-1] in self.kinds.by_name else t.value
+            if name in self.kinds.by_name:
+                return [(("kind", self.kinds.by_name[name]), i + 1)]
+        return []
+
     def new_object(self, kind, toks, i):
         """a new book [with title "Dune", author "Frank Herbert" and year 1965]"""
         res = [(New(kind, []), i)]
@@ -506,6 +602,16 @@ class Parser:
             return [(Builtin(POSTFIX_BUILTINS[k], [a]), j + 1)]
         if k == "JOINED_TOGETHER":
             return [(Builtin("join", [a, Text("")]), j + 1)]
+        if k == "ASJSON":
+            return [(Builtin("to_json", [a]), j + 1)]
+        if k in ("PADDED", "PADDED_LEFT"):
+            name = "pad" if k == "PADDED" else "pad_left"
+            return [(Builtin(name, [a, w]), m) for w, m in self.tight(toks, j + 1)]
+        if is_word(t, "as"):
+            return [(FromJson(a, spec), m) for spec, m in self.type_spec(toks, j + 1)]
+        if is_word(t, "repeated"):
+            return [(Builtin("repeat_text", [a, n]), m + 1) for n, m in self.exprs(toks, j + 1)
+                    if m < len(toks) and toks[m].kind == "TIMES"]
         if k == "JOINED":
             return [(Builtin("join", [a, s]), m) for s, m in self.primaries(toks, j + 1)]
         if k == "SPLIT":
@@ -515,6 +621,8 @@ class Parser:
             for x, m in self.exprs(toks, j + 1):
                 if m < len(toks) and toks[m].kind == "REPLACED":
                     res += [(Builtin("replace", [a, x, y]), p) for y, p in self.primaries(toks, m + 1)]
+                if is_word(toks[m] if m < len(toks) else None, "decimals", "decimal"):
+                    res.append((Builtin("decimals", [a, x]), m + 1))
         for sig in self.funcs.postfix(t):
             res += [(Call(sig, args), m) for args, m in self.match(sig.pattern[1:], toks, j, [a])]
         return res
@@ -988,6 +1096,38 @@ class Parser:
             prompt = self.choose([p[0] if len(p) == 1 else Concat(p) for p, j in self.print_args(toks, 1)
                                   if j == pos[-1]], "the question", toks[1:pos[-1]])
             return self.at(Ask(prompt, self.define(toks[-1])))
+        if k == "FETCH":
+            if n < 4 or not is_word(toks[-2], "into", "as") or toks[-1].kind != "WORD":
+                self.err('Write it like: fetch "https://example.com/data.json" into page.')
+            url = self.one_expr(toks[1:-2], "the address")
+            return self.at(Assign(self.define(toks[-1]), Builtin("fetch", [url])))
+        if k == "SEND":
+            ask = top_positions(toks, ("ANSWER_AS",))
+            end = ask[-1] if ask else n
+            to = top_positions(toks[:end], ("TO",))
+            if not to:
+                self.err('Write it like: send the order to "https://example.com/orders" and remember the reply as r.')
+            body = self.one_expr(toks[1:to[-1]], "what to send")
+            url = self.one_expr(toks[to[-1] + 1:end], "the address")
+            post = Builtin("post", [body, url])
+            if ask:
+                if ask[-1] != n - 2 or toks[-1].kind != "WORD":
+                    self.err('Write it like: send data to "https://..." and remember the reply as reply.')
+                return self.at(Assign(self.define(toks[-1]), post))
+            return self.at(Eval(post))
+        if k == "WAIT":
+            if n >= 3 and is_word(toks[-1], "second", "seconds", "millisecond", "milliseconds"):
+                ms = 1 if toks[-1].value.startswith("milli") else 1000
+                return self.at(Eval(Builtin("wait", [self.one_expr(toks[1:-1], "how long to wait"), Num(ms)])))
+            self.err("Write it like: wait 2 seconds, or: wait 300 milliseconds.")
+        if k == "RUN":
+            ask = top_positions(toks, ("ANSWER_AS",))
+            if ask:
+                if ask[-1] != n - 2 or toks[-1].kind != "WORD":
+                    self.err('Write it like: run "ls -l" and remember the output as listing.')
+                cmd = self.one_expr(toks[1:ask[-1]], "the command")
+                return self.at(Assign(self.define(toks[-1]), Builtin("run_output", [cmd])))
+            return self.at(Eval(Builtin("run", [self.one_expr(toks[1:], "the command")])))
         if k == "READ":
             if n < 4 or not is_word(toks[-2], "into", "as") or toks[-1].kind != "WORD":
                 self.err('Write it like: read the file "notes.txt" into notes.')
@@ -1181,6 +1321,9 @@ def parse_program(src, file="", lx=None):
     for s in sentences:
         if is_kind_decl(s.text):
             kinds.add(parse_kind_decl(s, lx, kinds))
+    if "moment" not in kinds.by_name:   # what "the current time" gives
+        kinds.add(KindInfo("moment", "moment", list(MOMENT_FIELDS), {f: f for f in MOMENT_FIELDS}))
+    resolve_field_specs(kinds)
     lx.protected = {w for words in kinds.fields.values() for w in words}
     funcs = Funcs()
     for s in sentences:

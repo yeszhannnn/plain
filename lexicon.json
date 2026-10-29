@@ -528,7 +528,12 @@
       "and save answer as",
       "and put answer in",
       "and call answer",
-      "and keep answer as"
+      "and keep answer as",
+      "and remember reply as",
+      "and remember response as",
+      "and remember output as",
+      "and remember result as",
+      "and keep output as"
     ],
     "READ": [
       "read"
@@ -612,6 +617,78 @@
       "that is",
       "which are",
       "which is"
+    ],
+    "FETCH": [
+      "fetch",
+      "download"
+    ],
+    "SEND": [
+      "send",
+      "post"
+    ],
+    "ASJSON": [
+      "as json"
+    ],
+    "CURRENT_TIME": [
+      "current time",
+      "time now",
+      "current date"
+    ],
+    "TIMESTAMP": [
+      "current timestamp"
+    ],
+    "MILLIS": [
+      "current time in milliseconds"
+    ],
+    "WAIT": [
+      "wait",
+      "sleep",
+      "pause for"
+    ],
+    "PI": [
+      "pi"
+    ],
+    "SIN": [
+      "sine of"
+    ],
+    "COS": [
+      "cosine of"
+    ],
+    "TAN": [
+      "tangent of"
+    ],
+    "LOG": [
+      "logarithm of",
+      "natural logarithm of"
+    ],
+    "RANDOM_DEC": [
+      "random decimal"
+    ],
+    "POSITION": [
+      "position of"
+    ],
+    "PADDED": [
+      "padded to"
+    ],
+    "PADDED_LEFT": [
+      "padded on left to"
+    ],
+    "CHAR_OF_CODE": [
+      "letter with code",
+      "character with code"
+    ],
+    "CODE_OF": [
+      "code of"
+    ],
+    "ENV": [
+      "environment variable"
+    ],
+    "RUN": [
+      "run",
+      "execute"
+    ],
+    "EXIT_CODE": [
+      "exit code"
     ]
   },
   "symbols": {

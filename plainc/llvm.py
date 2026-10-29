@@ -11,14 +11,16 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english, is_bot, walk_stmts, New, Field, Nothing, Try, Fail, ErrorText, Comprehension, BestBy)
+                   english, is_bot, walk_stmts, New, Field, Nothing, Try, Fail, ErrorText, Comprehension, BestBy,
+                   FromJson, Eval)
 from .errors import EngError
 from .types import BOOL, FLOAT, INT, TEXT, desc
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNTIME_DIR = os.path.join(HERE, "runtime")
-CORE_SOURCES = ["core.c", "text.c", "list.c", "map.c", "files.c"]
-BOT_SOURCES = ["json.c", "telegram.c"]
+CORE_SOURCES = ["core.c", "text.c", "list.c", "map.c", "files.c", "json.c"]
+NET_SOURCES = ["net.c"]
+BOT_SOURCES = ["telegram.c"]
 
 LLT = {"Int": "i64", "Float": "double", "Bool": "i1", "Text": "ptr", "List": "ptr", "Map": "ptr", "Nothing": "void"}
 
@@ -92,6 +94,29 @@ declare void @pl_try_pop()
 declare i32 @_setjmp(ptr) returns_twice
 declare ptr @pl_error_text()
 declare void @pl_raise(ptr)
+declare ptr @pl_now(i32)
+declare i64 @pl_timestamp()
+declare i64 @pl_millis()
+declare void @pl_wait(double)
+declare double @sin(double)
+declare double @cos(double)
+declare double @tan(double)
+declare double @pl_log(double)
+declare double @pl_random_float(double, double)
+declare i64 @pl_code(ptr)
+declare ptr @pl_char(i64)
+declare ptr @pl_env(ptr)
+declare i64 @pl_position(ptr, ptr)
+declare ptr @pl_pad(ptr, i64, i32)
+declare ptr @pl_repeat_text(ptr, i64)
+declare ptr @pl_decimals(double, i64)
+declare ptr @pl_to_json(i64, ptr)
+declare i64 @pl_from_json(ptr, ptr)
+declare ptr @pl_fetch(ptr)
+declare ptr @pl_post(ptr, ptr, i32)
+declare i64 @pl_run(ptr)
+declare ptr @pl_run_output(ptr)
+declare i64 @pl_exit_code()
 declare void @pl_list_reverse(ptr)
 declare ptr @pl_list_slice(ptr, i64, i64)
 declare i64 @pl_list_random(ptr)
@@ -365,6 +390,9 @@ class Gen:
             return "null"
         if isinstance(e, ErrorText):
             return self.call("ptr", "pl_error_text")
+        if isinstance(e, FromJson):
+            v = self.call("i64", "pl_from_json", f"ptr {self.expr(e.expr)}, ptr {self.desc(t)}")
+            return self.from_slot(v, t)
         if isinstance(e, Comprehension):
             items = self.expr(e.items)
             el, out_t = self.T(e.items).args[0], t.args[0]
@@ -566,6 +594,47 @@ class Gen:
             return self.call("ptr", "pl_arguments")
         if n == "known":
             return self.truthy("pl_map_has", f"ptr {a}, i64 {self.to_slot(vs[1], ts[1])}")
+        if n == "now":
+            return self.call("ptr", "pl_now", f"i32 {self.types.kinds.by_name['moment'].id}")
+        if n in ("timestamp", "millis", "exit_code"):
+            return self.call("i64", f"pl_{n}")
+        if n in ("sin", "cos", "tan"):
+            return self.call("double", n, f"double {self.conv(a, at, FLOAT)}")
+        if n == "log":
+            return self.call("double", "pl_log", f"double {self.conv(a, at, FLOAT)}")
+        if n == "random_float":
+            lo, hi = self.conv(vs[0], ts[0], FLOAT), self.conv(vs[1], ts[1], FLOAT)
+            return self.call("double", "pl_random_float", f"double {lo}, double {hi}")
+        if n == "code":
+            return self.call("i64", "pl_code", f"ptr {a}")
+        if n == "char":
+            return self.call("ptr", "pl_char", f"i64 {a}")
+        if n in ("env", "fetch", "run_output"):
+            return self.call("ptr", f"pl_{n}", f"ptr {a}")
+        if n == "run":
+            return self.call("i64", "pl_run", f"ptr {a}")
+        if n == "position":
+            return self.call("i64", "pl_position", f"ptr {a}, ptr {vs[1]}")
+        if n in ("pad", "pad_left"):
+            text = a if at.name == "Text" else self.call("ptr", "pl_to_text", f"i64 {self.to_slot(a, at)}, "
+                                                                              f"ptr {self.desc(at)}")
+            return self.call("ptr", "pl_pad", f"ptr {text}, i64 {vs[1]}, i32 {int(n == 'pad_left')}")
+        if n == "repeat_text":
+            return self.call("ptr", "pl_repeat_text", f"ptr {a}, i64 {vs[1]}")
+        if n == "decimals":
+            return self.call("ptr", "pl_decimals", f"double {self.conv(a, at, FLOAT)}, i64 {vs[1]}")
+        if n == "to_json":
+            return self.call("ptr", "pl_to_json", f"i64 {self.to_slot(a, at)}, ptr {self.desc(at)}")
+        if n == "post":
+            body = a if at.name == "Text" else self.call("ptr", "pl_to_json", f"i64 {self.to_slot(a, at)}, "
+                                                                              f"ptr {self.desc(at)}")
+            return self.call("ptr", "pl_post", f"ptr {body}, ptr {vs[1]}, i32 {2 if at.name == 'Text' else 1}")
+        if n == "wait":
+            amount = self.conv(a, at, FLOAT)
+            ms = f.t()
+            f.emit(f"{ms} = fmul double {amount}, {fconst(float(e.args[1].value))}")
+            self.call("void", "pl_wait", f"double {ms}")
+            return "0"
         raise EngError(f"internal: no code for {n}")
 
     def out_value(self, kind, v, t):
@@ -840,6 +909,8 @@ class Gen:
             self.block(s.handler or [])
             f.term(f"br label %{done}")
             f.start(done)
+        elif isinstance(s, Eval):
+            self.expr(s.expr)
         elif isinstance(s, Fail):
             self.call("void", "pl_raise", f"ptr {self.glued(s.parts)}")
             f.term("unreachable")
@@ -1011,9 +1082,9 @@ def emit(prog, funcs, types, file=""):
 LTO = ["-flto", "-fuse-ld=lld"] if shutil.which("ld.lld") else []
 
 
-def runtime_objects(bot):
+def runtime_objects(bot, net=False):
     """Compiled runtime, cached by the hash of its sources."""
-    sources = CORE_SOURCES + (BOT_SOURCES if bot else [])
+    sources = CORE_SOURCES + (NET_SOURCES if net or bot else []) + (BOT_SOURCES if bot else [])
     h = hashlib.sha256()
     for name in sorted(os.listdir(RUNTIME_DIR)):
         if name.endswith((".c", ".h")):
@@ -1041,6 +1112,7 @@ def build(prog, funcs, types, file, output):
         ll = os.path.join(d, "out.ll")
         with open(ll, "w", encoding="utf-8") as f:
             f.write(ir)
-        libs = ["-lgc", "-lm"] + (["-lcurl"] if bot else [])
-        subprocess.run(["clang", "-O2", *LTO, "-Wno-override-module", ll] + runtime_objects(bot) +
+        net = "call ptr @pl_fetch(" in ir or "call ptr @pl_post(" in ir
+        libs = ["-lgc", "-lm"] + (["-lcurl"] if bot or net else [])
+        subprocess.run(["clang", "-O2", *LTO, "-Wno-override-module", ll] + runtime_objects(bot, net) +
                        ["-o", output] + libs, check=True)

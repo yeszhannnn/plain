@@ -1,8 +1,9 @@
 """Rules shared by the interpreter and runtime/*.c, so both print exactly the same thing."""
 
+import json
 import re
 
-NO_SPACE_BEFORE = ".,!?;:)"
+NO_SPACE_BEFORE = ".,!?;:)]"
 NO_SPACE_AFTER = "(["
 
 # Upper -> lower case pairs: Latin, Latin-1, Cyrillic and the extra Kazakh letters.
@@ -112,3 +113,58 @@ def lines_of(s):
     if lines and lines[-1] == "":
         lines.pop()
     return [l[:-1] if l.endswith("\r") else l for l in lines]
+
+
+# ── JSON: the same text as runtime/json.c ──
+
+def to_data(v, t):
+    """A value as plain data for JSON; fields use their key ("first_name")."""
+    name = t.name
+    if name.startswith("Kind:"):
+        return None if v is None else {k: to_data(v.fields[k], ft) for k, _, ft in KINDS[name[5:]]}
+    if name == "List":
+        return [to_data(x, t.args[0]) for x in v]
+    if name == "Map":
+        return {str(k): to_data(x, t.args[1]) for k, x in v.items()}
+    if name == "Float":
+        return float(v)
+    return v
+
+
+def json_text(v, t):
+    return json.dumps(to_data(v, t), ensure_ascii=False, separators=(", ", ": "))
+
+
+def from_data(v, t):
+    """JSON data read into a type; anything missing or of the wrong kind becomes zero / empty."""
+    name = t.name
+    if name.startswith("Kind:"):
+        if not isinstance(v, dict):
+            return None
+        fields = {}
+        for k, d, ft in KINDS[name[5:]]:
+            raw = v[k] if k in v else v.get(d)
+            fields[k] = from_data(raw, ft)
+        return Obj(name[5:], fields)
+    if name == "List":
+        return [from_data(x, t.args[0]) for x in v] if isinstance(v, list) else []
+    if name == "Map":
+        if not isinstance(v, dict):
+            return {}
+        out = {}
+        for k, x in v.items():
+            if t.args[0].name == "Int":
+                m = INT_RE.fullmatch(k)
+                if not m:
+                    continue
+                k = int(m.group(1))
+            out[k] = from_data(x, t.args[1])
+        return out
+    number = isinstance(v, (int, float)) and not isinstance(v, bool)
+    if name == "Float":
+        return float(v) if number else 0.0
+    if name == "Int":
+        return int(v) if number else 0
+    if name == "Bool":
+        return v if isinstance(v, bool) else False
+    return v if isinstance(v, str) else ""

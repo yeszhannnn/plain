@@ -107,6 +107,10 @@ def split_sentences(src, file=""):
             ch = raw[i]
             if quote:
                 buf += ch
+                if ch == "\\" and i + 1 < len(raw):
+                    buf += raw[i + 1]       # an escaped character: \" \\ \n \t
+                    i += 2
+                    continue
                 if ch == quote and not (quote == "'" and is_apostrophe(raw, i)):
                     quote = None
             elif ch == '"' or (ch == "'" and not (i > 0 and raw[i - 1].isalnum())):
@@ -131,6 +135,9 @@ def split_sentences(src, file=""):
     return out
 
 
+ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"', "'": "'"}
+
+
 def tokenize(s, line, file=""):
     toks, i = [], 0
     while i < len(s):
@@ -138,10 +145,15 @@ def tokenize(s, line, file=""):
         if ch.isspace():
             i += 1
         elif ch == '"' or (ch == "'" and not (i > 0 and s[i - 1].isalnum())):
-            j = i + 1
+            j, text = i + 1, ""
             while j < len(s) and not (s[j] == ch and not (ch == "'" and is_apostrophe(s, j))):
+                if s[j] == "\\" and j + 1 < len(s):
+                    text += ESCAPES.get(s[j + 1], s[j + 1])
+                    j += 2
+                    continue
+                text += s[j]
                 j += 1
-            toks.append(Tok("STR", s[i + 1:j], s[i:j + 1]))
+            toks.append(Tok("STR", text, s[i:j + 1]))
             i = j + 1
         elif ch.isdigit():
             j = i

@@ -297,6 +297,145 @@ def bot_replies(name, script, backend, cwd=None):
         os.chdir(old)
 
 
+STD = r"""a book has a title, a year (number), a price (decimal), some tags (a list of texts) and an author (a person).
+a person has a name and an age (number).
+set dune to a new book with title "Dune \"1\"", year 1965 and price 9.5.
+add "sf" to the tags of dune.
+set the author of dune to a new person with name "Frank" and age 60.
+set data to dune as json.
+say data.
+set copy to data as a book.
+say the title of copy and then the name of the author of copy and then the price of copy.
+set many to "[{\"title\": \"A\", \"year\": 1}, {\"title\": \"B\"}]" as a list of books.
+say the number of items in many and then the year of item 1 of many and then the price of item 2 of many.
+set counts to "{\"a\": 1, \"b\": 2}" as a table of numbers.
+say counts.
+try to set bad to "{oops" as a book, and if that fails, say the error.
+say pi with 3 decimals.
+say the sine of 0 and then the logarithm of 1.
+say the position of "lo" in "hello" and then the position of "z" in "hello".
+say "[" and then "ab" padded to 5 and then "]" and then "ab" padded on the left to 5 and then "]".
+say "ab" repeated 3 times.
+say the code of "A" and then the letter with code 1046.
+say 3.14159 with 2 decimals.
+run "echo hi; exit 3" and remember the output as out.
+say out and then the exit code.
+say the environment variable "PLAIN_TEST_VAR".
+set t to the current time.
+if the year of t is more than 2020, say "year ok".
+if the current timestamp is more than 1600000000, say "timestamp ok".
+set start to the current time in milliseconds.
+wait 50 milliseconds.
+if the current time in milliseconds minus start is at least 40, say "wait ok".
+set r to a random decimal from 0 to 1.
+if r is at least 0 and r is less than 1, say "random ok".
+"""
+
+STD_OUT = """{"title": "Dune \\"1\\"", "year": 1965, "price": 9.5, "tags": ["sf"], "author": {"name": "Frank", "age": 60}}
+Dune "1" Frank 9.5
+2 1 0.0
+a: 1, b: 2
+The text is not valid JSON.
+3.142
+0.0 0.0
+4 0
+[ab   ]   ab]
+ababab
+65 Ж
+3.14
+hi
+3
+xyz
+year ok
+timestamp ok
+wait ok
+random ok
+"""
+
+
+class Library(unittest.TestCase):
+    """The standard library: JSON, numbers, text, time and the system, in both modes."""
+
+    def test_standard_library(self):
+        os.environ["PLAIN_TEST_VAR"] = "xyz"
+        self.assertEqual(interpreted(STD), (STD_OUT, "", 0))
+        self.assertEqual(native(STD), (STD_OUT, "", 0))
+
+    def test_field_types(self):
+        with self.assertRaises(EngError) as e:
+            engc.compile_source("a book has a title (colour).\n")
+        self.assertIn('I don\'t know the type "colour"', str(e.exception))
+
+
+class Web(unittest.TestCase):
+    """fetch and send against a small server on this machine."""
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def reply(self, code, body=b""):
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == "/weather":
+                    self.reply(200, json.dumps({"latitude": 43.25, "current_weather": {
+                        "temperature": 21.44, "windspeed": 7.2, "weathercode": 0}}).encode())
+                else:
+                    self.reply(404)
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+                self.reply(200, f"{self.headers['Content-Type']} | {body}".encode())
+
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}"
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.no_proxy = os.environ.get("NO_PROXY")
+        os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        if cls.no_proxy is None:
+            os.environ.pop("NO_PROXY", None)
+        else:
+            os.environ["NO_PROXY"] = cls.no_proxy
+
+    def test_weather_example(self):
+        program = os.path.join(EX, "weather.eng")
+        exe = os.path.join(BUILD, "weather")
+        engc.build(engc.compile_file(program), exe)
+        cases = [("/weather", "Almaty: 21.4 °C, wind 7.2 km/h.\nClear sky.\n"),
+                 ("/missing", f"Could not get the weather: The request to {self.url}/missing failed with status 404.\n")]
+        for path, expected in cases:
+            with self.subTest(path=path):
+                p = subprocess.run([sys.executable, os.path.join(ROOT, "engc.py"), "run", program, self.url + path],
+                                   capture_output=True, text=True)
+                self.assertEqual(p.stdout, expected)
+                p = subprocess.run([exe, self.url + path], capture_output=True, text=True)
+                self.assertEqual(p.stdout, expected)
+
+    def test_send(self):
+        text = (f'a order has a dish and a count.\nset o to a new order with dish "plov" and count 2.\n'
+                f'send o to "{self.url}/orders" and remember the reply as r.\nsay r.\n'
+                f'send "hi" to "{self.url}/notes" and remember the reply as r.\nsay r.\n'
+                f'try to send "x" to "http://127.0.0.1:1/", and if that fails, say the error.\n')
+        expected = ('application/json | {"dish": "plov", "count": 2}\ntext/plain; charset=utf-8 | hi\n'
+                    "I couldn't reach http://127.0.0.1:1/.\n")
+        self.assertEqual(interpreted(text), (expected, "", 0))
+        self.assertEqual(native(text), (expected, "", 0))
+
+
 class Bots(unittest.TestCase):
     BACKENDS = ("interpreter", "native")
 

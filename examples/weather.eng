@@ -1,0 +1,20 @@
+Note: the current weather in Almaty from the Open-Meteo service, read straight from JSON.
+Note: another address of the same service can be given: engc.py run weather.eng "https://..."
+
+a report has a current weather (a weather).
+a weather has a temperature (decimal), a windspeed (decimal) and a weathercode (number).
+
+set address to "https://api.open-meteo.com/v1/forecast?latitude=43.25&longitude=76.95&current_weather=true".
+if the number of items in the arguments is more than 0, set address to item 1 of the arguments.
+
+try the following.
+  fetch address into page.
+  set report to page as a report.
+  set now to the current weather of report.
+  say "Almaty:" and then the temperature of now with 1 decimals and then "°C, wind"
+    and then the windspeed of now with 1 decimals and then "km/h.".
+  if the weathercode of now is 0, say "Clear sky.".
+  otherwise say "Weather code" and then the weathercode of now and then ".".
+if something goes wrong
+  say "Could not get the weather:" and then the error.
+that's all.

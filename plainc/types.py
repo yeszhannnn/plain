@@ -14,7 +14,8 @@ from .core import (AddTo, Ask, Assign, Bin, Break, Builtin, Call, CallStmt, Cmp,
                    EmptyMap, Exit, ForEach, ForRange, FuncDef, Handler, If, Index, IsNum, ListLit, Logic, Lookup,
                    Msg, MsgNum, Name, Num, OneOf, Persist, Print, Random, RandomItem, RemoveAt, RemoveKey,
                    RemoveValue, Repeat, Reply, Return, Reverse, Slice, Sort, Text, Truth, Var, While, WriteFile,
-                   english, New, Field, Nothing, FuncSig, clone_body, Try, Fail, ErrorText, Comprehension, BestBy)
+                   english, New, Field, Nothing, FuncSig, clone_body, Try, Fail, ErrorText, Comprehension, BestBy,
+                   FromJson, Eval, spec_words)
 from .errors import EngError
 
 
@@ -167,6 +168,12 @@ class Checker:
         self.kinds = getattr(funcs, "kinds", None)
         kinds = self.kinds.by_name.values() if self.kinds else []
         self.kind_fields = {k.name: {f: self.new() for f in k.fields} for k in kinds}
+        if "moment" in self.kind_fields:
+            for f, t in self.kind_fields["moment"].items():
+                unify(t, TEXT if f == "weekday" else INT)
+        for k in kinds:
+            for f, spec in k.field_specs.items():
+                unify(self.kind_fields[k.name][f], self.from_spec(spec))
         self.params, self.ret = {}, {}
         for sig in funcs.sigs:
             self.signature(sig)
@@ -382,6 +389,9 @@ class Checker:
             return self.field(e)
         if isinstance(e, ErrorText):
             return TEXT
+        if isinstance(e, FromJson):
+            self.eq(self.expr(e.expr), TEXT, lambda: f'Only text can be read as {spec_words(e.spec)}.')
+            return self.from_spec(e.spec)
         if isinstance(e, Comprehension):
             el = self.each_item(e.var, e.items)
             if e.cond is not None:
@@ -397,6 +407,15 @@ class Checker:
                 f'Only things of a kind you described (like "a book has a title") can be nothing, not {words(c)}.'))
             return t
         self.fail(f"internal: unknown expression {e}")
+
+    def from_spec(self, spec):
+        if spec[0] == "list":
+            return ListT(self.from_spec(spec[1]))
+        if spec[0] == "table":
+            return MapT(TEXT, self.from_spec(spec[1]))
+        if spec[0] == "kind":
+            return kind_con(spec[1])
+        return {"int": INT, "float": FLOAT, "text": TEXT, "bool": BOOL}[spec[0]]
 
     def each_item(self, var, items):
         """The type of the items of a list that var goes through."""
@@ -609,6 +628,41 @@ class Checker:
             return TEXT if n == "file_text" else BOOL
         if n == "arguments":
             return ListT(TEXT)
+        if n == "now":
+            return kind_con(self.kinds.by_name["moment"])
+        if n in ("timestamp", "millis", "exit_code"):
+            return INT
+        if n in ("sin", "cos", "tan", "log"):
+            self.numeric(a0, num_msg)
+            return FLOAT
+        if n == "random_float":
+            for t in ts:
+                self.numeric(t, "A random decimal needs numbers on both ends.")
+            return FLOAT
+        if n in ("code", "env", "fetch", "run_output", "run"):
+            self.eq(a0, TEXT, lambda: f'"{english(e)}" needs text, but "{sub}" is {words(a0)}.')
+            return INT if n in ("code", "run") else TEXT
+        if n == "char":
+            self.eq(a0, INT, "A letter code must be a whole number.")
+            return TEXT
+        if n == "position":
+            for t in ts:
+                self.eq(t, TEXT, lambda: f'"{english(e)}" works with texts only.')
+            return INT
+        if n in ("to_json", "post"):
+            if n == "post":
+                self.eq(ts[1], TEXT, "An address must be text in quotes.")
+            return TEXT
+        if n in ("pad", "pad_left", "repeat_text", "decimals"):
+            if n == "repeat_text":
+                self.eq(a0, TEXT, lambda: f'Only text can be repeated, and "{sub}" is {words(a0)}.')
+            if n == "decimals":
+                self.numeric(a0, num_msg)
+            self.eq(ts[1], INT, "The width or number of decimals must be a whole number.")
+            return TEXT
+        if n == "wait":
+            self.numeric(a0, "How long to wait must be a number.")
+            return INT
         if n == "known":
             self.eq(a0, MapT(ts[1], self.new()), lambda: f'"{sub}" is not a table.')
             return BOOL
@@ -715,6 +769,8 @@ class Checker:
         elif isinstance(s, Try):
             self.block(s.body)
             self.block(s.handler or [])
+        elif isinstance(s, Eval):
+            self.expr(s.expr)
         elif isinstance(s, Fail):
             for p in s.parts:
                 self.expr(p)

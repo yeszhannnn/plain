@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -114,7 +116,7 @@ static int is_space(char c) { return c == ' ' || c == '\t' || c == '\r' || c == 
 void buf_piece(Buf *b, const char *s) {
     if (!s || !*s) return;
     if (b->n && !is_space(b->p[b->n - 1]) && !strchr("([", b->p[b->n - 1]) && !is_space(s[0]) &&
-        !strchr(".,!?;:)", s[0]))
+        !strchr(".,!?;:)]", s[0]))
         buf_putc(b, ' ');
     buf_puts(b, s);
 }
@@ -440,6 +442,76 @@ int64_t pl_random(int64_t lo, int64_t hi) {
     rng_state ^= rng_state << 17;
     unsigned long long range = (unsigned long long)(hi - lo) + 1;
     return lo + (int64_t)(range ? rng_state % range : rng_state);
+}
+
+double pl_random_float(double lo, double hi) {
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 7;
+    rng_state ^= rng_state << 17;
+    return lo + (hi - lo) * ((double)(rng_state >> 11) * (1.0 / 9007199254740992.0));
+}
+
+double pl_log(double x) {
+    if (x <= 0) pl_fail("I can't take the logarithm of zero or a negative number.");
+    return log(x);
+}
+
+/* ── time ── */
+
+int64_t *pl_obj_new(int32_t id);
+
+int64_t *pl_now(int32_t moment) {
+    static const char *days[] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+    int64_t *o = pl_obj_new(moment);
+    o[0] = tm.tm_year + 1900, o[1] = tm.tm_mon + 1, o[2] = tm.tm_mday;
+    o[3] = tm.tm_hour, o[4] = tm.tm_min, o[5] = tm.tm_sec;
+    o[6] = (int64_t)(intptr_t)days[(tm.tm_wday + 6) % 7];
+    return o;
+}
+
+int64_t pl_timestamp(void) { return (int64_t)time(NULL); }
+
+int64_t pl_millis(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+void pl_wait(double ms) {
+    if (ms <= 0) return;
+    fflush(stdout);
+    struct timespec ts = {(time_t)(ms / 1000), (long)((ms - (double)(time_t)(ms / 1000) * 1000) * 1e6)};
+    nanosleep(&ts, NULL);
+}
+
+/* ── the system: environment and other programs ── */
+
+static int64_t exit_code;
+
+char *pl_env(const char *name) { return pl_strdup(getenv(nz(name))); }
+int64_t pl_exit_code(void) { return exit_code; }
+
+static int64_t status_code(int status) { return WIFEXITED(status) ? WEXITSTATUS(status) : 1; }
+
+int64_t pl_run(const char *cmd) {
+    fflush(stdout);
+    exit_code = status_code(system(nz(cmd)));
+    return exit_code;
+}
+
+char *pl_run_output(const char *cmd) {
+    fflush(stdout);
+    FILE *p = popen(nz(cmd), "r");
+    if (!p) pl_fail("I couldn't run \"%s\".", nz(cmd));
+    Buf b = {0};
+    char chunk[4096];
+    size_t n;
+    while ((n = fread(chunk, 1, sizeof chunk, p)) > 0) buf_put(&b, chunk, n);
+    exit_code = status_code(pclose(p));
+    return buf_take(&b);
 }
 
 /* ── input ── */
