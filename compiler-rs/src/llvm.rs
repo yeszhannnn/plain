@@ -12,7 +12,7 @@ use crate::pyfmt::basename;
 use crate::syntax::{EngError, Res};
 use crate::types::{float, text_t, Ty, Types};
 
-const DECLS: &str = include_str!("decls.ll");
+const DECLS: &str = include_str!("../../runtime/declarations.llvm"); // shared with plainc
 
 pub const RUNTIME: [(&str, &str); 10] = [
     ("core.c", include_str!("../../runtime/core.c")),
