@@ -1,0 +1,70 @@
+Note: the rules of a small coffee shop. The owner reads this file as the shop's rules,
+Note: and the bot runs exactly these sentences.
+
+remember everything in "coffee-memory.json".
+
+Note: prices, in tenge.
+the price of "latte" is 1500.
+the price of "cappuccino" is 1400.
+the price of "croissant" is 900.
+
+Note: the rules.
+the limit of "big order" is 5000.
+the percent of "big order" is 10.
+the percent of "every fifth order" is 20.
+the limit of "refund days" is 14.
+set owner to "Aliya".
+
+to find the discount for a total and a count
+  if the count mod 5 is 0, give back the total * the percent of "every fifth order" / 100.
+  if the total is at least the limit of "big order", give back the total * the percent of "big order" / 100.
+  give back 0.
+that's all.
+
+when someone sends "/start", reply "Hi, " and then their name and then "! Send me what you want, for example: latte." with buttons "/menu", "/pay" and "/refund".
+
+when someone sends "/menu"
+  for every item in the price, add item and then "-" and then the price of item and then "tenge" to their menu.
+  reply their menu joined with a new line.
+  set their menu to an empty list.
+that's all.
+
+when someone sends "/pay"
+  if their total is 0, reply "Your order is empty.".
+  otherwise
+    add 1 to their orders.
+    set their discount to the discount for their total and their orders.
+    reply "To pay:" and then their total minus their discount and then "tenge, discount" and then their discount and then "tenge.".
+    set their checkout to the current timestamp.
+    set their refundable to their total minus their discount.
+    set their total to 0.
+  that's all.
+that's all.
+
+when someone sends "/refund"
+  set their days to (the current timestamp minus their checkout) / 86400.
+  if their refundable is 0, reply "There is nothing to refund.".
+  otherwise, if their days is more than the limit of "refund days", reply "Refunds are possible within" and then the limit of "refund days" and then "days after paying.".
+  otherwise
+    reply "Refunded" and then their refundable and then "tenge.".
+    set their refundable to 0.
+  that's all.
+that's all.
+
+when someone sends a message that starts with "/price"
+  if their name is not owner, reply "Only the owner can change prices.".
+  otherwise
+    set their words to the words of the message.
+    set the price of item 2 of their words to item 3 of their words as a number.
+    reply "New price of" and then item 2 of their words and then ":" and then item 3 of their words and then "tenge.".
+  that's all.
+that's all.
+
+when someone sends anything else
+  set their item to the message in lowercase.
+  if the price of their item is unknown, reply "We don't have" and then their item and then ". Send /menu to see what we have.".
+  otherwise
+    add the price of their item to their total.
+    reply "Added" and then their item and then ". Your order:" and then their total and then "tenge. Send /pay when ready.".
+  that's all.
+that's all.

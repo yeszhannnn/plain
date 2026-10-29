@@ -676,6 +676,16 @@ class Bots(unittest.TestCase):
             self.assertEqual([r[0] for r in second], [
                 "1. buy milk\n2. call mom", "All your notes are gone.", "No notes yet.", "Nothing about tea."], b)
 
+    def test_coffee_rules(self):
+        for b in self.BACKENDS:
+            work = tempfile.mkdtemp(prefix=f"plain-coffee-{b}-")
+            got = bot_replies("coffee_rules.eng", say("latte", "croissant", "/pay", "cappuccino", "cappuccino",
+                                                      "cappuccino", "cappuccino", "/pay", "/refund", "/price latte 1"),
+                              b, cwd=work)
+            self.assertEqual([r[0] for r in got][2], "To pay: 2400 tenge, discount 0 tenge.", b)
+            self.assertEqual([r[0] for r in got][7:], ["To pay: 5040 tenge, discount 560 tenge.", "Refunded 5040 tenge.",
+                                                       "Only the owner can change prices."], b)
+
     def test_bot_words_outside_a_rule(self):
         with self.assertRaises(EngError):
             engc.compile_source('reply "hi".')
